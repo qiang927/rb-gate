@@ -3,6 +3,7 @@ import { config } from "./config.js";
 import { DEFAULT_UA, UpstreamError, parseRetryAfterMs } from "./google.js";
 import { isClaudeModel } from "./models.js";
 import { unwrapPayload } from "./translate.js";
+import { logError } from "./logger.js";
 
 export function buildUpstreamBody({ credential, model, request, stream }) {
   const body = {
@@ -55,7 +56,11 @@ export async function generateContent({ credential, accessToken, model, request,
     body: JSON.stringify(body),
     signal: signal || AbortSignal.timeout(timeoutMs),
   });
-  if (!res.ok) throw await toUpstreamError(res);
+  if (!res.ok) {
+    const failure = await toUpstreamError(res);
+    logError(`upstream ${failure.status} model=${model}: ${failure.message}`);
+    throw failure;
+  }
   let data;
   try {
     data = await res.json();
@@ -96,7 +101,11 @@ export async function* streamGenerateContent({
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    if (!res.ok) throw await toUpstreamError(res);
+    if (!res.ok) {
+      const failure = await toUpstreamError(res);
+      logError(`upstream ${failure.status} model=${model}: ${failure.message}`);
+      throw failure;
+    }
     if (!res.body) throw new UpstreamError("upstream returned an empty stream", { status: 502 });
 
     const decoder = new TextDecoder();

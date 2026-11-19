@@ -16,6 +16,7 @@ import {
   readUsage,
 } from "./translate.js";
 import { generateContent } from "./upstream.js";
+import { logError, logInfo, logWarn, recentLogs } from "./logger.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -33,9 +34,12 @@ app.use(express.json({ limit: "64mb" }));
 
 if (config.logRequests) {
   app.use((req, res, next) => {
+    const url = req.originalUrl || "";
+    if (!url.startsWith("/v1/") && !url.startsWith("/admin/api/")) return next();
+    if (url.startsWith("/admin/api/logs")) return next();
     const started = Date.now();
     res.on("finish", () => {
-      console.log(`${req.method} ${req.originalUrl} -> ${res.statusCode} ${Date.now() - started}ms`);
+      logInfo(`${req.method} ${url} -> ${res.statusCode} ${Date.now() - started}ms`);
     });
     next();
   });
@@ -187,6 +191,7 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
     } catch (error) {
       if (controller.signal.aborted) return res.end();
       const status = error instanceof UpstreamError ? error.status || 502 : 500;
+      logError(`chat failed (${status}): ${error.message}`);
       return sendOpenaiError(res, status, error.message, { type: "upstream_error", code: "upstream_failed" });
     }
   }
@@ -197,6 +202,7 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
   } catch (error) {
     if (controller.signal.aborted) return res.end();
     const status = error instanceof UpstreamError ? error.status || 502 : 500;
+    logError(`chat failed (${status}): ${error.message}`);
     return sendOpenaiError(res, status, error.message, { type: "upstream_error", code: "upstream_failed" });
   }
 
@@ -255,7 +261,7 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
     res.write("data: [DONE]\n\n");
     res.end();
   } catch (error) {
-    console.error("[stream] error:", error.message);
+    logError(`[stream] ${error.message}`);
     sendOpenaiError(res, 502, error.message, { type: "upstream_error", code: "stream_failed" });
   }
 });
@@ -324,6 +330,10 @@ app.post("/admin/api/password", requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/admin/api/logs", requireAdmin, (req, res) => {
+  res.json({ logs: recentLogs(Number(req.query.limit) || 200) });
+});
+
 app.get("/admin/api/overview", requireAdmin, (req, res) => {
   const credentials = store.listCredentials();
   const stats = {
@@ -371,6 +381,7 @@ app.post("/admin/api/credentials/import-robin", requireAdmin, async (req, res) =
     const result = await provisionRobin({ email, oauthToken, androidId, label, scopes });
     res.json({ ok: true, ...result });
   } catch (error) {
+    logError(`robin import failed (${email || "?"}): ${error.message}`);
     res.status(400).json({ ok: false, error: error.message, hint: explainRobinImportError(error.message) });
   }
 });
@@ -378,8 +389,10 @@ app.post("/admin/api/credentials/import-robin", requireAdmin, async (req, res) =
 app.post("/admin/api/credentials/:id/test", requireAdmin, async (req, res) => {
   try {
     const result = await testCredential(req.params.id);
+    logInfo(`credential test ok: ${req.params.id} project=${result.projectId || "-"} tier=${result.tier || "-"}`);
     res.json({ ok: true, ...result });
   } catch (error) {
+    logError(`credential test failed: ${req.params.id}: ${error.message}`);
     res.status(400).json({ ok: false, error: error.message });
   }
 });
@@ -506,6 +519,8 @@ const server = app.listen(config.port, config.host, () => {
   for (const warning of ensureConfigWarnings()) lines.push(`  ! ${warning}`);
   lines.push("");
   console.log(lines.join("\n"));
+  logInfo(`gateway listening on port ${config.port} (credentials=${store.listCredentials().length}, dataDir=${config.dataDir})`);
+  for (const warning of ensureConfigWarnings()) logWarn(`config: ${warning}`);
 });
 
 function shutdown(signal) {

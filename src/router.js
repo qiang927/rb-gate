@@ -3,6 +3,7 @@ import { ensureAccessToken } from "./credentials.js";
 import { UpstreamError } from "./google.js";
 import { store } from "./store.js";
 import { streamGenerateContent } from "./upstream.js";
+import { logError } from "./logger.js";
 
 const MAX_COOLDOWN_MS = 10 * 60 * 1000;
 let roundRobin = 0;
@@ -89,6 +90,7 @@ export async function withCredential(handler, { signal, attempts = config.maxRet
     }
   }
   const suffix = errors.map((item) => `${item.credential}: ${item.error}`).join(" | ");
+  if (suffix) logError(`all credentials failed: ${suffix}`);
   const error = new UpstreamError(errors.length ? `all credentials failed (${suffix})` : "request failed", { status: 502 });
   error.attempts = errors;
   throw error;
@@ -138,6 +140,7 @@ export async function openStream({ model, request, signal }) {
     return { cred, generator, first, errors };
   }
   const suffix = errors.map((item) => `${item.credential}: ${item.error}`).join(" | ");
+  if (suffix) logError(`all credentials failed: ${suffix}`);
   const error = new UpstreamError(`all credentials failed (${suffix})`, { status: 502 });
   error.attempts = errors;
   throw error;

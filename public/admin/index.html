@@ -91,6 +91,7 @@
   .badge.robin { color: #9db4ff; border-color: #2a3760; background: #121a30; }
   .badge.oauth { color: #e0b3ff; border-color: #402a60; background: #1a1230; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .log-box { margin: 0; padding: 12px; max-height: 360px; overflow: auto; background: #0b0e14; border: 1px solid #232b3a; border-radius: 10px; font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-all; color: #c8d2e0; }
   .toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); background: #1c2230; border: 1px solid #33405a; padding: 10px 16px; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,.5); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; max-width: min(90vw, 720px); }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(-4px); }
   .toast.err { border-color: #5a2a2a; color: #ffb3b3; }
@@ -161,6 +162,7 @@
       <button data-tab="credentials" class="active">凭证</button>
       <button data-tab="keys">API Keys</button>
       <button data-tab="models">模型</button>
+      <button data-tab="logs">日志</button>
       <button data-tab="settings">设置</button>
     </div>
 
@@ -251,6 +253,21 @@
         <strong>可用模型</strong>
         <p class="hint">来自 Code Assist 的 Antigravity 模型表；网关会把 OpenAI 请求翻译成 <code>v1internal:generateContent</code>。</p>
         <div id="modelsTableWrap"><div class="empty">加载中…</div></div>
+      </div>
+    </section>
+
+    <!-- logs -->
+    <section id="tab-logs" class="hidden">
+      <div class="card">
+        <div class="row" style="justify-content:space-between; margin-bottom:8px">
+          <strong>运行日志</strong>
+          <div class="row">
+            <label class="hint" style="margin:0"><input type="checkbox" id="logAuto" checked /> 自动刷新（5s）</label>
+            <button id="logRefreshBtn">刷新</button>
+          </div>
+        </div>
+        <p class="hint">最近 200 条服务端日志（内存环形缓冲，重启清空）。导入失败、上游 403/429 的完整错误和每次请求都会出现在这里。</p>
+        <pre id="logBox" class="log-box">加载中…</pre>
       </div>
     </section>
 
@@ -365,12 +382,37 @@
     $("initialPasswordHint").textContent = "";
   }
 
+  let logTimer = null;
+
+  async function loadLogs() {
+    const box = $("logBox");
+    try {
+      const data = await api("/admin/api/logs?limit=200");
+      const lines = (data.logs || []).map((entry) => {
+        const time = new Date(entry.t).toTimeString().slice(0, 8);
+        return `${time} ${String(entry.level || "info").toUpperCase().padEnd(5)} ${entry.message}`;
+      });
+      box.textContent = lines.join("\n") || "（暂无日志）";
+      box.scrollTop = box.scrollHeight;
+    } catch (error) {
+      box.textContent = `加载日志失败：${error.message}`;
+    }
+  }
+
+  function startLogPolling() {
+    if (logTimer) return;
+    logTimer = setInterval(() => {
+      if (!$("tab-logs").classList.contains("hidden") && $("logAuto").checked) loadLogs();
+    }, 5000);
+  }
+
   async function showApp() {
     $("loginView").classList.add("hidden");
     $("appView").classList.remove("hidden");
     $("logoutBtn").classList.remove("hidden");
     $("baseUrl").textContent = location.origin + "/v1";
     await loadOverview();
+    startLogPolling();
   }
 
   async function loadOverview() {
@@ -598,6 +640,7 @@
   });
   $("copyOauth").addEventListener("click", () => copyText($("oauthUrl").textContent));
   $("copyBase").addEventListener("click", () => copyText($("baseUrl").textContent));
+  $("logRefreshBtn").addEventListener("click", loadLogs);
 
   function copyText(text) {
     navigator.clipboard?.writeText(text).then(() => toast("已复制")).catch(() => toast("复制失败，请手动选择", true));
@@ -606,9 +649,10 @@
   document.querySelectorAll(".tabs button").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".tabs button").forEach((item) => item.classList.toggle("active", item === btn));
-      ["credentials", "keys", "models", "settings"].forEach((name) => {
+      ["credentials", "keys", "models", "logs", "settings"].forEach((name) => {
         $(`tab-${name}`).classList.toggle("hidden", name !== btn.dataset.tab);
       });
+      if (btn.dataset.tab === "logs") loadLogs();
     });
   });
 
