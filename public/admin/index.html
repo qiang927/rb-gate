@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>robin gateway · 控制台</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0d10;
+    --panel: #12151b;
+    --panel-2: #171b22;
+    --border: #242a35;
+    --text: #e6e9ef;
+    --muted: #8b93a3;
+    --accent: #7c9cff;
+    --green: #46c98b;
+    --red: #ff6b6b;
+    --amber: #f0b429;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(1200px 600px at 20% -10%, #182033 0%, var(--bg) 55%);
+    color: var(--text);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+  }
+  a { color: var(--accent); }
+  button {
+    font: inherit;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--text);
+    padding: 7px 12px;
+    border-radius: 8px;
+    transition: border-color .15s, background .15s;
+  }
+  button:hover { border-color: #3a4456; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #0a0d14; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.08); }
+  button.danger { color: var(--red); border-color: #4a2727; }
+  button.ghost { background: transparent; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  input, select, textarea {
+    font: inherit;
+    color: var(--text);
+    background: #0d1015;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    width: 100%;
+  }
+  input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 70px; }
+  label { display: block; color: var(--muted); font-size: 12px; margin: 0 0 4px; }
+  .field { margin-bottom: 12px; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 28px 20px 80px; }
+  header.top { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; flex-wrap: wrap; }
+  .logo { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, #7c9cff, #46c98b); display: grid; place-items: center; font-weight: 800; color: #091018; }
+  header.top h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  header.top .sub { color: var(--muted); font-size: 12px; }
+  header.top .spacer { flex: 1; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; font-size: 12px; border: 1px solid var(--border); color: var(--muted); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+  .dot.red { background: var(--red); }
+  .dot.amber { background: var(--amber); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
+  .grid { display: grid; gap: 14px; }
+  .grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  @media (max-width: 780px) { .grid.cols-3, .grid.cols-2 { grid-template-columns: 1fr; } }
+  .stat { font-size: 26px; font-weight: 700; letter-spacing: -.5px; }
+  .stat-label { color: var(--muted); font-size: 12px; }
+  .tabs { display: flex; gap: 6px; margin: 24px 0 14px; flex-wrap: wrap; }
+  .tabs button { border-radius: 999px; padding: 6px 14px; background: transparent; color: var(--muted); }
+  .tabs button.active { background: var(--panel-2); color: var(--text); border-color: #3a4456; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-size: 12px; font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--border); color: var(--muted); }
+  .badge.active { color: var(--green); border-color: #1f4735; background: #0f1f18; }
+  .badge.error { color: var(--red); border-color: #4a2727; background: #1f1010; }
+  .badge.disabled { color: var(--muted); }
+  .badge.robin { color: #9db4ff; border-color: #2a3760; background: #121a30; }
+  .badge.oauth { color: #e0b3ff; border-color: #402a60; background: #1a1230; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); background: #1c2230; border: 1px solid #33405a; padding: 10px 16px; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,.5); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; max-width: min(90vw, 720px); }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(-4px); }
+  .toast.err { border-color: #5a2a2a; color: #ffb3b3; }
+  .copy { display: flex; gap: 8px; align-items: center; background: #0d1015; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  .copy code { flex: 1; overflow: auto; white-space: nowrap; }
+  .hint { color: var(--muted); font-size: 12px; line-height: 1.6; }
+  .hint code { background: #0d1015; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border); }
+  .empty { color: var(--muted); padding: 26px 6px; text-align: center; }
+  .login-wrap { max-width: 400px; margin: 10vh auto 0; }
+  .login-wrap h2 { margin: 0 0 6px; font-size: 20px; }
+  .hidden { display: none !important; }
+  details summary { cursor: pointer; color: var(--muted); }
+  .modal-bg { position: fixed; inset: 0; background: rgba(4,6,10,.72); display: grid; place-items: center; padding: 20px; z-index: 20; }
+  .modal { width: min(720px, 100%); max-height: 86vh; overflow: auto; }
+  .kbd { font-family: var(--mono); background: #0d1015; border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="logo">R</div>
+    <div>
+      <h1>robin gateway</h1>
+      <div class="sub">Code Assist → OpenAI 兼容 · 多凭证管理</div>
+    </div>
+    <div class="spacer"></div>
+    <span class="pill" id="healthPill"><span class="dot" id="healthDot"></span><span id="healthText">检测中…</span></span>
+    <button class="ghost hidden" id="logoutBtn">退出</button>
+  </header>
+
+  <section id="loginView" class="login-wrap hidden">
+    <div class="card">
+      <h2>管理员登录</h2>
+      <p class="hint">首次启动时密码会打印在服务端日志里（或由 <code>ADMIN_PASSWORD</code> 环境变量指定）。</p>
+      <div class="field">
+        <label for="passwordInput">密码</label>
+        <input id="passwordInput" type="password" autocomplete="current-password" placeholder="admin password" />
+      </div>
+      <button class="primary" id="loginBtn" style="width:100%">登录</button>
+      <p class="hint" id="initialPasswordHint" style="margin-top:12px"></p>
+    </div>
+  </section>
+
+  <main id="appView" class="hidden">
+    <div class="grid cols-3">
+      <div class="card"><div class="stat" id="statCreds">–</div><div class="stat-label">凭证总数</div></div>
+      <div class="card"><div class="stat" id="statActive">–</div><div class="stat-label">可用 / 报错</div></div>
+      <div class="card"><div class="stat" id="statUses">–</div><div class="stat-label">累计请求</div></div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <div class="small muted">OpenAI 兼容接口（填入任意 OpenAI 客户端）</div>
+          <div class="copy" style="margin-top:6px; min-width:min(560px, 100%)">
+            <code id="baseUrl">–</code>
+            <button class="ghost" id="copyBase">复制</button>
+          </div>
+        </div>
+        <div class="hint" style="max-width:330px">
+          Base URL 填上面这个地址，API Key 用「API Keys」页里的 <code>sk-robin-…</code>；模型名见「模型」页。
+        </div>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button data-tab="credentials" class="active">凭证</button>
+      <button data-tab="keys">API Keys</button>
+      <button data-tab="models">模型</button>
+      <button data-tab="settings">设置</button>
+    </div>
+
+    <!-- credentials -->
+    <section id="tab-credentials">
+      <div class="grid cols-2">
+        <div class="card">
+          <div class="row" style="justify-content:space-between; margin-bottom:8px">
+            <strong>导入 robin 凭证</strong>
+            <span class="badge robin">oauth_token → master token</span>
+          </div>
+          <p class="hint">
+            从浏览器里取出 <code>oauth_token</code> Cookie（值形如 <code>oauth2_4/…</code>），粘贴到这里。
+            服务端会用 gpsoauth 换成长期 master token，再 mint 出访问令牌；之后自动续期，不用再登录。
+          </p>
+          <div class="field"><label>Google 邮箱</label><input id="robinEmail" type="email" placeholder="you@gmail.com" /></div>
+          <div class="field"><label>oauth_token</label><textarea id="robinToken" placeholder="oauth2_4/0A…" spellcheck="false"></textarea></div>
+          <div class="field"><label>备注（可选）</label><input id="robinLabel" placeholder="个人号 / 小号" /></div>
+          <div class="row">
+            <button class="primary" id="importRobinBtn">导入并验证</button>
+            <span class="hint">导入时会立即验证一次 mint + project 查询</span>
+          </div>
+          <details style="margin-top:14px">
+            <summary>怎么拿 oauth_token？</summary>
+            <div class="hint" style="margin-top:8px">
+              1. 浏览器打开 <code>https://accounts.google.com</code> 并登录目标账号。<br />
+              2. F12 → Application/Application → Cookies → <code>accounts.google.com</code>，找名为 <code>oauth_token</code> 的 HttpOnly Cookie（document.cookie 读不到）。<br />
+              3. 复制整段值。它在换出 master token 后即失效，无需担心泄露；但 master token 等价账号权限，请只在自己的机器上导入。
+            </div>
+          </details>
+        </div>
+
+        <div class="card">
+          <div class="row" style="justify-content:space-between; margin-bottom:8px">
+            <strong>OAuth 授权导入</strong>
+            <span class="badge oauth">Antigravity 客户端流程</span>
+          </div>
+          <p class="hint">
+            走标准 Google OAuth（与 Antigravity / Gemini CLI 相同的 client），拿到 refresh_token 后由服务端自动刷新。
+            适合不方便从浏览器抠 Cookie 的场景。
+          </p>
+          <div class="row" style="margin-top:10px">
+            <button id="oauthUrlBtn">生成授权链接</button>
+            <button class="ghost" id="oauthOpenBtn" disabled>打开</button>
+          </div>
+          <div class="copy hidden" id="oauthUrlBox" style="margin-top:10px">
+            <code id="oauthUrl">–</code>
+            <button class="ghost" id="copyOauth">复制</button>
+          </div>
+          <p class="hint" style="margin-top:10px">
+            回调地址是本服务的 <code>/admin/oauth/callback</code>；授权完成后自动回到此页。若在无头环境，把链接发给能打开浏览器的设备即可。
+          </p>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <div class="row" style="justify-content:space-between; margin-bottom:6px">
+          <strong>凭证池</strong>
+          <button class="ghost" id="refreshCreds">刷新</button>
+        </div>
+        <div id="credsTableWrap">
+          <div class="empty">加载中…</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- keys -->
+    <section id="tab-keys" class="hidden">
+      <div class="card">
+        <div class="row" style="justify-content:space-between; margin-bottom:10px">
+          <strong>网关 API Keys</strong>
+          <div class="row">
+            <input id="newKeyName" placeholder="备注，如 laptop" style="width:200px" />
+            <button class="primary" id="addKeyBtn">新建</button>
+          </div>
+        </div>
+        <p class="hint">用 <code>Authorization: Bearer sk-robin-…</code> 或 <code>X-Api-Key</code> 访问 <code>/v1/*</code>。用环境变量 <code>GATEWAY_API_KEYS</code> 管理时，面板只读。</p>
+        <div id="keysTableWrap"><div class="empty">加载中…</div></div>
+      </div>
+    </section>
+
+    <!-- models -->
+    <section id="tab-models" class="hidden">
+      <div class="card">
+        <strong>可用模型</strong>
+        <p class="hint">来自 Code Assist 的 Antigravity 模型表；网关会把 OpenAI 请求翻译成 <code>v1internal:generateContent</code>。</p>
+        <div id="modelsTableWrap"><div class="empty">加载中…</div></div>
+      </div>
+    </section>
+
+    <!-- settings -->
+    <section id="tab-settings" class="hidden">
+      <div class="card">
+        <strong>运行设置</strong>
+        <div id="settingsBox" class="grid cols-2" style="margin-top:12px"></div>
+        <p class="hint" style="margin-top:12px">
+          通过环境变量修改：<code>ADMIN_PASSWORD</code>、<code>GATEWAY_API_KEYS</code>、<code>ENCRYPTION_KEY</code>、<code>DATA_DIR</code>、
+          <code>ROBIN_APP</code>/<code>ROBIN_CLIENT_SIG</code>、<code>MAX_RETRIES</code>、<code>CREDENTIAL_COOLDOWN_MS</code>、<code>LOG_REQUESTS</code>。
+        </p>
+        <p class="hint">
+          Render 免费实例无持久磁盘：请使用付费磁盘或把 <code>DATA_DIR</code> 指向挂载卷，否则重启后凭证与 API Key 会丢失。
+        </p>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <strong>管理员密码</strong>
+        <p class="hint" style="margin-top:6px" id="passwordHint">登录后可以随时修改密码（至少 8 位）。</p>
+        <div class="grid cols-2" style="margin-top:10px">
+          <div class="field"><label>当前密码</label><input id="pwdCurrent" type="password" autocomplete="current-password" /></div>
+          <div class="field"><label>新密码</label><input id="pwdNew" type="password" autocomplete="new-password" /></div>
+        </div>
+        <div class="field"><label>确认新密码</label><input id="pwdConfirm" type="password" autocomplete="new-password" /></div>
+        <div class="row" style="margin-top:10px">
+          <button class="primary" id="changePwdBtn">修改密码</button>
+          <span class="hint">修改后当前会话仍然有效，其他已登录会话不受影响。</span>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  let token = "";
+  let overview = null;
+
+  function toast(message, isError = false) {
+    const el = $("toast");
+    el.textContent = message;
+    el.classList.toggle("err", Boolean(isError));
+    el.classList.add("show");
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => el.classList.remove("show"), 4200);
+  }
+
+  async function api(path, options = {}) {
+    const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+    const res = await fetch(path, { ...options, headers, credentials: "same-origin" });
+    let data = null;
+    const text = await res.text();
+    try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+    if (!res.ok) {
+      const message = data?.error?.message || data?.error || data?.message || `HTTP ${res.status}`;
+      throw new Error(message);
+    }
+    return data;
+  }
+
+  function esc(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+  }
+
+  function ago(iso) {
+    if (!iso) return "—";
+    const diff = Date.now() - new Date(iso).getTime();
+    if (Number.isNaN(diff)) return "—";
+    const s = Math.floor(diff / 1000);
+    if (s < 60) return `${s}s 前`;
+    if (s < 3600) return `${Math.floor(s / 60)}m 前`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h 前`;
+    return `${Math.floor(s / 86400)}d 前`;
+  }
+
+  async function checkHealth() {
+    try {
+      const res = await fetch("/health");
+      const data = await res.json();
+      $("healthDot").className = "dot";
+      $("healthText").textContent = `${data.credentials?.active ?? 0}/${data.credentials?.total ?? 0} 凭证可用 · ${data.models} 模型`;
+    } catch {
+      $("healthDot").className = "dot red";
+      $("healthText").textContent = "服务不可达";
+    }
+  }
+
+  async function boot() {
+    checkHealth();
+    try {
+      const session = await api("/admin/api/session");
+      if (session.authenticated) await showApp();
+      else showLogin();
+    } catch {
+      showLogin();
+    }
+  }
+
+  function showLogin() {
+    $("loginView").classList.remove("hidden");
+    $("appView").classList.add("hidden");
+    $("logoutBtn").classList.add("hidden");
+    $("initialPasswordHint").textContent = "";
+  }
+
+  async function showApp() {
+    $("loginView").classList.add("hidden");
+    $("appView").classList.remove("hidden");
+    $("logoutBtn").classList.remove("hidden");
+    $("baseUrl").textContent = location.origin + "/v1";
+    await loadOverview();
+  }
+
+  async function loadOverview() {
+    overview = await api("/admin/api/overview");
+    const stats = overview.stats || {};
+    $("statCreds").textContent = stats.credentials ?? 0;
+    $("statActive").textContent = `${stats.active ?? 0} / ${stats.error ?? 0}`;
+    $("statUses").textContent = stats.uses ?? 0;
+    if (overview.initialPassword) {
+      $("initialPasswordHint").textContent = `首次生成的密码：${overview.initialPassword}（登录后请设置 ADMIN_PASSWORD 固定密码）`;
+    }
+    renderCredentials(overview.credentials || []);
+    renderKeys(overview.apiKeys || []);
+    renderModels(overview.models || []);
+    renderSettings(overview.settings || {});
+    if (overview.admin && overview.admin.source === "env") {
+      $("passwordHint").textContent = "当前密码由部署环境变量 ADMIN_PASSWORD 提供，请到部署平台修改；面板内修改会被拒绝。";
+      ["pwdCurrent", "pwdNew", "pwdConfirm"].forEach((id) => { $(id).disabled = true; });
+      $("changePwdBtn").disabled = true;
+    }
+  }
+
+  function renderCredentials(creds) {
+    const wrap = $("credsTableWrap");
+    if (!creds.length) {
+      wrap.innerHTML = '<div class="empty">还没有凭证。先导入一个 robin 凭证。</div>';
+      return;
+    }
+    const rows = creds.map((cred) => {
+      const cooling = cred.cooldownUntil && cred.cooldownUntil > Date.now();
+      const statusText = cooling ? "冷却中" : cred.status || "active";
+      const statusClass = cooling ? "" : esc(cred.status || "active");
+      return `<tr>
+        <td>
+          <div><strong>${esc(cred.label || cred.email || cred.id)}</strong></div>
+          <div class="small muted">${esc(cred.email || "")}</div>
+        </td>
+        <td><span class="badge ${esc(cred.type)}">${esc(cred.type)}</span></td>
+        <td><span class="badge ${statusClass}">${statusText}</span></td>
+        <td class="small">
+          <div class="mono">${esc(cred.projectId || "—")}</div>
+          <div class="muted">${esc(cred.tier || "")}</div>
+        </td>
+        <td class="small">
+          <div>${cred.uses || 0} 次</div>
+          <div class="muted">${esc(ago(cred.lastUsedAt))}</div>
+        </td>
+        <td class="small" style="max-width:240px">
+          ${cred.lastError ? `<span style="color:var(--red)">${esc(String(cred.lastError).slice(0, 160))}</span>` : '<span class="muted">—</span>'}
+        </td>
+        <td>
+          <div class="row" style="gap:6px; flex-wrap:nowrap">
+            <button data-act="test" data-id="${esc(cred.id)}">测试</button>
+            <button data-act="toggle" data-id="${esc(cred.id)}" data-status="${esc(cred.status)}">${cred.status === "disabled" ? "启用" : "禁用"}</button>
+            <button class="danger" data-act="delete" data-id="${esc(cred.id)}">删除</button>
+          </div>
+        </td>
+      </tr>`;
+    }).join("");
+    wrap.innerHTML = `<table>
+      <thead><tr><th>账号</th><th>类型</th><th>状态</th><th>项目 / 层级</th><th>用量</th><th>最近错误</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+    wrap.querySelectorAll("button[data-act]").forEach((btn) => {
+      btn.addEventListener("click", () => handleCredAction(btn.dataset.act, btn.dataset.id, btn.dataset.status));
+    });
+  }
+
+  async function handleCredAction(act, id, status) {
+    try {
+      if (act === "test") {
+        toast("测试中…");
+        const result = await api(`/admin/api/credentials/${encodeURIComponent(id)}/test`, { method: "POST" });
+        toast(`可用 · project=${result.projectId || "?"} tier=${result.tier || "?"}`);
+        await loadOverview();
+      } else if (act === "toggle") {
+        const next = status === "disabled" ? "active" : "disabled";
+        await api(`/admin/api/credentials/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ status: next }) });
+        await loadOverview();
+      } else if (act === "delete") {
+        if (!confirm("删除这个凭证？对应 Google 账号的授权不会被撤销。")) return;
+        await api(`/admin/api/credentials/${encodeURIComponent(id)}`, { method: "DELETE" });
+        toast("已删除");
+        await loadOverview();
+      }
+    } catch (error) {
+      toast(error.message, true);
+    }
+  }
+
+  function renderKeys(keys) {
+    const wrap = $("keysTableWrap");
+    if (!keys.length) {
+      wrap.innerHTML = '<div class="empty">还没有 API Key。</div>';
+      return;
+    }
+    const rows = keys.map((key) => `<tr>
+      <td class="mono">${esc(key.key)}</td>
+      <td>${esc(key.name || "")}</td>
+      <td class="small muted">${esc(key.source || "file")}</td>
+      <td class="small muted">${esc(ago(key.createdAt))}</td>
+      <td>${key.source === "env" ? '<span class="muted small">env 管理</span>' : `<button class="danger" data-key="${esc(key.id)}">删除</button>`}</td>
+    </tr>`).join("");
+    wrap.innerHTML = `<table><thead><tr><th>Key</th><th>备注</th><th>来源</th><th>创建</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    wrap.querySelectorAll("button[data-key]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("删除这个 API Key？")) return;
+        try {
+          await api(`/admin/api/keys/${encodeURIComponent(btn.dataset.key)}`, { method: "DELETE" });
+          toast("已删除");
+          await loadOverview();
+        } catch (error) {
+          toast(error.message, true);
+        }
+      });
+    });
+  }
+
+  function renderModels(models) {
+    const wrap = $("modelsTableWrap");
+    if (!models.length) {
+      wrap.innerHTML = '<div class="empty">没有模型。</div>';
+      return;
+    }
+    const rows = models.map((model) => `<tr>
+      <td class="mono">${esc(model.id)}</td>
+      <td class="small">${esc(model.display_name || "")}</td>
+      <td class="small muted">${model.context_length ? model.context_length.toLocaleString() : "—"}</td>
+      <td class="small muted">${model.max_completion_tokens ? model.max_completion_tokens.toLocaleString() : "—"}</td>
+    </tr>`).join("");
+    wrap.innerHTML = `<table><thead><tr><th>模型</th><th>名称</th><th>上下文</th><th>最大输出</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  async function changePassword() {
+    const currentPassword = $("pwdCurrent").value;
+    const newPassword = $("pwdNew").value;
+    const confirm = $("pwdConfirm").value;
+    if (!currentPassword || !newPassword) return toast("请填写当前密码和新密码", true);
+    if (newPassword !== confirm) return toast("两次输入的新密码不一致", true);
+    if (newPassword.length < 8) return toast("新密码至少 8 位", true);
+    try {
+      await api("/admin/api/password", { method: "POST", body: { currentPassword, newPassword } });
+      $("pwdCurrent").value = $("pwdNew").value = $("pwdConfirm").value = "";
+      toast("密码已更新");
+    } catch (error) {
+      toast(error.message, true);
+    }
+  }
+
+  function renderSettings(settings) {
+    const entries = Object.entries(settings);
+    $("settingsBox").innerHTML = entries.map(([key, value]) => `
+      <div class="field">
+        <label>${esc(key)}</label>
+        <div class="mono small" style="word-break:break-all">${esc(typeof value === "string" ? value : JSON.stringify(value))}</div>
+      </div>`).join("");
+  }
+
+  // ---- events ----
+  $("loginBtn").addEventListener("click", async () => {
+    const password = $("passwordInput").value;
+    if (!password) return;
+    try {
+      await api("/admin/api/login", { method: "POST", body: JSON.stringify({ password }) });
+      $("passwordInput").value = "";
+      await showApp();
+    } catch (error) {
+      toast(error.message, true);
+    }
+  });
+  $("passwordInput").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") $("loginBtn").click();
+  });
+  $("logoutBtn").addEventListener("click", async () => {
+    await api("/admin/api/logout", { method: "POST" }).catch(() => {});
+    showLogin();
+  });
+  $("changePwdBtn").addEventListener("click", changePassword);
+
+  $("importRobinBtn").addEventListener("click", async () => {
+    const email = $("robinEmail").value.trim();
+    const oauthToken = $("robinToken").value.trim();
+    if (!email || !oauthToken) return toast("邮箱和 oauth_token 都要填", true);
+    const btn = $("importRobinBtn");
+    btn.disabled = true;
+    btn.textContent = "导入中…";
+    try {
+      const result = await api("/admin/api/credentials/import-robin", {
+        method: "POST",
+        body: JSON.stringify({ email, oauthToken, label: $("robinLabel").value.trim() }),
+      });
+      $("robinToken").value = "";
+      toast(result.warning ? `导入成功，但：${result.warning}` : "导入成功，已取得可用令牌");
+      await loadOverview();
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "导入并验证";
+    }
+  });
+
+  $("refreshCreds").addEventListener("click", () => loadOverview().then(() => toast("已刷新")).catch((e) => toast(e.message, true)));
+
+  $("addKeyBtn").addEventListener("click", async () => {
+    try {
+      const result = await api("/admin/api/keys", { method: "POST", body: JSON.stringify({ name: $("newKeyName").value.trim() }) });
+      $("newKeyName").value = "";
+      toast(`新 Key：${result.key.key}`);
+      await loadOverview();
+    } catch (error) {
+      toast(error.message, true);
+    }
+  });
+
+  $("oauthUrlBtn").addEventListener("click", async () => {
+    try {
+      const result = await api("/admin/api/oauth/url");
+      $("oauthUrl").textContent = result.url;
+      $("oauthUrlBox").classList.remove("hidden");
+      $("oauthOpenBtn").disabled = false;
+      $("oauthOpenBtn").onclick = () => window.open(result.url, "_blank", "noopener");
+    } catch (error) {
+      toast(error.message, true);
+    }
+  });
+  $("copyOauth").addEventListener("click", () => copyText($("oauthUrl").textContent));
+  $("copyBase").addEventListener("click", () => copyText($("baseUrl").textContent));
+
+  function copyText(text) {
+    navigator.clipboard?.writeText(text).then(() => toast("已复制")).catch(() => toast("复制失败，请手动选择", true));
+  }
+
+  document.querySelectorAll(".tabs button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".tabs button").forEach((item) => item.classList.toggle("active", item === btn));
+      ["credentials", "keys", "models", "settings"].forEach((name) => {
+        $(`tab-${name}`).classList.toggle("hidden", name !== btn.dataset.tab);
+      });
+    });
+  });
+
+  const params = new URLSearchParams(location.search);
+  if (params.get("imported")) {
+    setTimeout(() => toast(`OAuth 凭证已导入：${params.get("imported")}`), 400);
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+# Render Blueprint for robin-gateway.
+#
+# Free instances have NO persistent disk: imported credentials and API keys
+# live in DATA_DIR and disappear on every redeploy/restart. Use `plan: starter`
+# (and uncomment the disk block) if you want the credential pool to survive.
+services:
+  - type: web
+    name: robin-gateway
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      # Set your own admin password when Render asks for it (or edit it later in
+      # Dashboard -> Environment). Never commit a real password to git.
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: DATA_DIR
+        value: /data
+    # disk:
+    #   name: robin-data
+    #   mountPath: /data
+    #   sizeGB: 1
