@@ -41,8 +41,8 @@ ADMIN_PASSWORD=your-password npm start
 
 ### 方式一：robin（推荐，长期有效）
 
-1. 浏览器登录要使用的 Google 账号（`https://accounts.google.com`）。
-2. F12 → Application → Cookies → `accounts.google.com` → 找到 **HttpOnly** 的 `oauth_token`，复制整段值（形如 `oauth2_4/…`）。`document.cookie` 读不到它是正常的。
+1. 用无痕窗口打开 [Android 设备登录页](https://accounts.google.com/o/android/auth?lang=en&cc=US&langCountry=en_US&xoauth_display_name=Android+Device&tmpl=new_account&source=android&return_user_id=true&flowName=EmbeddedSetupAndroid)（EmbeddedSetup 流程），登录目标账号。**普通 `https://accounts.google.com` 网页登录不会写入 `oauth_token`**，只有这个 Android 设备添加账号流程会（跳转参数里带 `set_oauth_token_cookie=true`）。
+2. 走完页面流程后，F12 → Application → Cookies → `accounts.google.com` → 找到 **HttpOnly** 的 `oauth_token`，复制整段值（形如 `oauth2_4/…`）。`document.cookie` 读不到它是正常的。
 3. 打开网关 `/admin/` → 填入邮箱与 `oauth_token` → 「导入并验证」。
 
 服务端会立即执行 `exchange_token` 换 master token、mint 一次 access token、调用 `loadCodeAssist` 拿项目 ID；成功即进入凭证池。之后每 55 分钟自动续期，不需要再碰浏览器。

@@ -185,9 +185,12 @@
           <details style="margin-top:14px">
             <summary>怎么拿 oauth_token？</summary>
             <div class="hint" style="margin-top:8px">
-              1. 浏览器打开 <code>https://accounts.google.com</code> 并登录目标账号。<br />
-              2. F12 → Application/Application → Cookies → <code>accounts.google.com</code>，找名为 <code>oauth_token</code> 的 HttpOnly Cookie（document.cookie 读不到）。<br />
-              3. 复制整段值。它在换出 master token 后即失效，无需担心泄露；但 master token 等价账号权限，请只在自己的机器上导入。
+              <code>oauth_token</code> 只在 <b>Android 设备添加账号（EmbeddedSetup）</b> 流程里写入；普通的 <code>accounts.google.com</code> 网页登录<b>不会</b>产生这个 Cookie。<br />
+              1. 用无痕窗口打开
+              <a href="https://accounts.google.com/o/android/auth?lang=en&amp;cc=US&amp;langCountry=en_US&amp;xoauth_display_name=Android+Device&amp;tmpl=new_account&amp;source=android&amp;return_user_id=true&amp;flowName=EmbeddedSetupAndroid" target="_blank" rel="noreferrer">Android 设备登录页</a>。<br />
+              2. 用目标账号登录，跟着页面走完（可能显示“添加账号到设备”，不需要真的连接设备）。<br />
+              3. F12 → Application → Cookies → <code>https://accounts.google.com</code>，找 HttpOnly 的 <code>oauth_token</code>（值形如 <code>oauth2_4/…</code>，document.cookie 读不到），复制整段值。<br />
+              4. 粘到上面的表单。它在换出 master token 后即失效；但 master token 等价账号权限，只导入到自己的实例。
             </div>
           </details>
         </div>
