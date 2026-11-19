@@ -376,9 +376,9 @@ function explainRobinImportError(message) {
 }
 
 app.post("/admin/api/credentials/import-robin", requireAdmin, async (req, res) => {
-  const { email, oauthToken, label, androidId, scopes } = req.body || {};
+  const { email, oauthToken, label, androidId, scopes, app, clientSig } = req.body || {};
   try {
-    const result = await provisionRobin({ email, oauthToken, androidId, label, scopes });
+    const result = await provisionRobin({ email, oauthToken, androidId, label, scopes, app, clientSig });
     res.json({ ok: true, ...result });
   } catch (error) {
     logError(`robin import failed (${email || "?"}): ${error.message}`);
@@ -400,8 +400,21 @@ app.post("/admin/api/credentials/:id/test", requireAdmin, async (req, res) => {
 app.patch("/admin/api/credentials/:id", requireAdmin, (req, res) => {
   const cred = store.rawCredential(req.params.id);
   if (!cred) return res.status(404).json({ ok: false, error: "credential not found" });
-  const { label, status } = req.body || {};
+  const { label, status, app, clientSig, scopes } = req.body || {};
   if (label !== undefined) cred.label = String(label).slice(0, 120);
+  if (cred.type === "robin" && (app !== undefined || clientSig !== undefined || scopes !== undefined)) {
+    if (app !== undefined) cred.app = String(app).trim() || cred.app;
+    if (clientSig !== undefined) cred.clientSig = String(clientSig).trim() || cred.clientSig;
+    if (scopes !== undefined) {
+      cred.scopes = Array.isArray(scopes) ? scopes.filter(Boolean) : String(scopes).split(/[\s,]+/).filter(Boolean);
+    }
+    // Force a fresh mint with the new app/client_sig on the next call.
+    cred.accessToken = "";
+    cred.accessExpiresAt = 0;
+    cred.status = "active";
+    cred.lastError = "";
+    cred.cooldownUntil = 0;
+  }
   if (status !== undefined) {
     if (!["active", "disabled"].includes(status)) {
       return res.status(400).json({ ok: false, error: "status must be active or disabled" });
