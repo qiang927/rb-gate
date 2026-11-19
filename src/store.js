@@ -49,6 +49,12 @@ class Store {
 
   get sessionSecret() {
     if (config.sessionSecret) return config.sessionSecret;
+    // Fall back to a value derived from ENCRYPTION_KEY so admin sessions survive
+    // container restarts on hosts without a persistent disk (e.g. Render free tier).
+    const encryptionKey = process.env.ENCRYPTION_KEY?.trim();
+    if (encryptionKey) {
+      return crypto.createHmac("sha256", encryptionKey).update("robin/session/v1").digest("hex");
+    }
     if (this._sessionSecret) return this._sessionSecret;
     try {
       this._sessionSecret = fs.readFileSync(SESSION_SECRET_FILE(), "utf8").trim();
