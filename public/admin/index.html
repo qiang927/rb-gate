@@ -313,7 +313,8 @@
         showLogin();
         throw new Error("登录已失效，请重新登录（可能是换了地址访问：localhost 与 127.0.0.1 的 Cookie 不互通）");
       }
-      const message = data?.error?.message || data?.error || data?.message || `HTTP ${res.status}`;
+      let message = data?.error?.message || data?.error || data?.message || `HTTP ${res.status}`;
+      if (data?.hint) message += ` —— ${data.hint}`;
       throw new Error(message);
     }
     return data;

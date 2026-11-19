@@ -351,13 +351,27 @@ app.get("/admin/api/overview", requireAdmin, (req, res) => {
   });
 });
 
+function explainRobinImportError(message) {
+  const text = String(message || "");
+  if (/BadAuthentication|InvalidToken|invalid_token/i.test(text)) {
+    return "oauth_token 是一次性的，换出 master token 后就失效；也可能不是从 Android EmbeddedSetup 流程获取，或与填写的邮箱不一致。请重新走 EmbeddedSetup 登录拿一个新 token。";
+  }
+  if (/RESTRICTED_CLIENT|restricted_client/i.test(text)) {
+    return "这个 Android 应用身份被 Google 限制，无法用来换 token。请改走 OAuth 授权导入（面板里的 OAuth 链接）。";
+  }
+  if (/exchange failed/i.test(text)) {
+    return "Google 拒绝了这次 oauth_token 兑换。确认 token 完整（形如 oauth2_4/…）、未过期、且只提交一次。";
+  }
+  return "";
+}
+
 app.post("/admin/api/credentials/import-robin", requireAdmin, async (req, res) => {
   const { email, oauthToken, label, androidId, scopes } = req.body || {};
   try {
     const result = await provisionRobin({ email, oauthToken, androidId, label, scopes });
     res.json({ ok: true, ...result });
   } catch (error) {
-    res.status(400).json({ ok: false, error: error.message });
+    res.status(400).json({ ok: false, error: error.message, hint: explainRobinImportError(error.message) });
   }
 });
 
