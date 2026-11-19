@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import express from "express";
 import { config, ensureConfigWarnings } from "./config.js";
-import { provisionOAuth, provisionRobin, testCredential } from "./credentials.js";
+import { importMaster, provisionOAuth, provisionRobin, testCredential } from "./credentials.js";
 import { buildAuthUrl, createPkcePair, UpstreamError } from "./google.js";
 import { GoogleWebSession, WEB_MODELS, isWebModel } from "./googleweb.js";
 import { decryptString } from "./crypto.js";
@@ -504,6 +504,18 @@ app.post("/admin/api/credentials/import-robin", requireAdmin, async (req, res) =
   } catch (error) {
     logError(`robin import failed (${email || "?"}): ${error.message}`);
     res.status(400).json({ ok: false, error: error.message, hint: explainRobinImportError(error.message) });
+  }
+});
+
+app.post("/admin/api/credentials/import-master", requireAdmin, async (req, res) => {
+  const { email, masterToken, label, androidId, scopes, app, clientSig } = req.body || {};
+  try {
+    const result = await importMaster({ email, masterToken, androidId, label, scopes, app, clientSig });
+    logInfo(`rob-in master imported: ${email || "?"} (${result.credential.id})`);
+    res.json(result);
+  } catch (error) {
+    logError(`master import failed (${email || "?"}): ${error.message}`);
+    res.status(400).json({ ok: false, error: error.message });
   }
 });
 

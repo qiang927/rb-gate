@@ -95,6 +95,35 @@ async function resolveEmail(accessToken, fallback) {
  * Import a credential from the Robin flow: the browser-side oauth_token is
  * exchanged for a long-lived master token, then minted into an access token.
  */
+/**
+ * Import a credential from an already-known master token (aas_et/... / oauth2rt/...).
+ * Useful when an oauth_token was already exchanged elsewhere and we only
+ * need to (re)register the resulting master token, e.g. moving a credential
+ * between deployments.
+ */
+export async function importMaster({ email, masterToken, androidId, label, scopes, app, clientSig }) {
+  const normalized = String(email || "").trim().toLowerCase();
+  if (!normalized) throw fail("email is required");
+  const token = String(masterToken || "").trim();
+  if (!token) throw fail("masterToken is required");
+  if (token.length < 20 || /\s/.test(token)) {
+    throw fail("masterToken does not look like a Google master token");
+  }
+  const deviceId = androidId || crypto.randomBytes(8).toString("hex");
+  const credential = store.upsertCredential({
+    email: normalized,
+    label,
+    type: "robin",
+    masterToken: token,
+    androidId: deviceId,
+    scopes: scopes || config.robinScopes,
+    app: app || config.robinApp,
+    clientSig: clientSig || config.robinClientSig,
+    status: "active",
+  });
+  return { ok: true, credential: store.getCredential(credential.id) };
+}
+
 export async function provisionRobin({ email, oauthToken, androidId, label, scopes, app, clientSig }) {
   const normalized = String(email || "").trim().toLowerCase();
   if (!normalized) throw fail("email is required");

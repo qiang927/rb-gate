@@ -204,6 +204,16 @@
               4. 粘到上面的表单。它在换出 master token 后即失效；但 master token 等价账号权限，只导入到自己的实例。
             </div>
           </details>
+          <details style="margin-top:14px">
+            <summary>已有 master token？直接导入（迁移 / 换部署）</summary>
+            <div class="hint" style="margin-top:8px">
+              master token 是 oauth_token 换出来的长期令牌（形如 <code>aas_et/…</code> 或 <code>oauth2rt_/…</code>）。
+              换了部署、或者 Render 重启清空 <code>/data</code> 之后，用它把凭证塞回去，不必再走一次登录页。
+            </div>
+            <div class="field"><label>Google 邮箱</label><input id="masterEmail" type="email" placeholder="you@gmail.com" /></div>
+            <div class="field"><label>master token</label><textarea id="masterToken" placeholder="aas_et/…" spellcheck="false"></textarea></div>
+            <div class="row"><button id="importMasterBtn">直接导入</button></div>
+          </details>
         </div>
 
         <div class="card">
@@ -639,6 +649,29 @@
     } finally {
       btn.disabled = false;
       btn.textContent = "导入并验证";
+    }
+  });
+
+  $("importMasterBtn").addEventListener("click", async () => {
+    const email = $("masterEmail").value.trim() || $("robinEmail").value.trim();
+    const masterToken = $("masterToken").value.trim();
+    if (!email || !masterToken) return toast("邮箱和 master token 都要填", true);
+    const btn = $("importMasterBtn");
+    btn.disabled = true;
+    btn.textContent = "导入中…";
+    try {
+      await api("/admin/api/credentials/import-master", {
+        method: "POST",
+        body: JSON.stringify({ email, masterToken, label: $("robinLabel").value.trim() || "master import" }),
+      });
+      $("masterToken").value = "";
+      toast("master token 已导入");
+      await loadOverview();
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "直接导入";
     }
   });
 
