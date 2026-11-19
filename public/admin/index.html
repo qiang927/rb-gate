@@ -125,6 +125,7 @@
     <div class="card">
       <h2>管理员登录</h2>
       <p class="hint">首次启动时密码会打印在服务端日志里（或由 <code>ADMIN_PASSWORD</code> 环境变量指定）。</p>
+      <p class="hint">请始终用同一个地址访问（<code>localhost</code> 或 <code>127.0.0.1</code> 二选一），两者的 Cookie 不互通。</p>
       <div class="field">
         <label for="passwordInput">密码</label>
         <input id="passwordInput" type="password" autocomplete="current-password" placeholder="admin password" />
@@ -308,6 +309,10 @@
     const text = await res.text();
     try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
     if (!res.ok) {
+      if (res.status === 401 && !path.endsWith("/login")) {
+        showLogin();
+        throw new Error("登录已失效，请重新登录（可能是换了地址访问：localhost 与 127.0.0.1 的 Cookie 不互通）");
+      }
       const message = data?.error?.message || data?.error || data?.message || `HTTP ${res.status}`;
       throw new Error(message);
     }
