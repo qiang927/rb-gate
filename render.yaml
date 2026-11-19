@@ -22,3 +22,8 @@ services:
     #   name: robin-data
     #   mountPath: /data
     #   sizeGB: 1
+    #
+    # Optional: keep credentials across restarts without a disk by adding these
+    # in Dashboard -> Environment (create a KV namespace + API token first):
+    #   CF_ACCOUNT_ID / CF_KV_NAMESPACE_ID / CF_KV_API_TOKEN
+    # Keep ENCRYPTION_KEY stable, otherwise the KV ciphertext cannot be decrypted.

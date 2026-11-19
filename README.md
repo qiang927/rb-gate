@@ -65,10 +65,30 @@ ADMIN_PASSWORD=your-password npm start
 3. 部署完成后打开 `https://<service>.onrender.com/admin/`，用 Dashboard 里 `ADMIN_PASSWORD` 的值登录。
 4. 在 Render → Settings → Custom Domain 绑定你的独立域名（CNAME 到 `*.onrender.com`）。
 
-**重要：Render 免费实例没有持久磁盘。** `DATA_DIR` 里的凭证、API Key、加密密钥在每次重启/重新部署后都会丢失（免费实例还会休眠）。生产使用请：
+**重要：Render 免费实例没有持久磁盘。** `DATA_DIR` 里的凭证、API Key、加密密钥在每次重启/重新部署后都会丢失（免费实例还会休眠）。三选一：
 
-- 升级到 `starter` 并取消 `render.yaml` 里 `disk:` 段的注释（1 GB 足够），或
-- 把 `DATA_DIR` 挂到任意持久卷，并固定 `ENCRYPTION_KEY`（否则旧凭证解密失败）。
+- 升级到 `starter` 并取消 `render.yaml` 里 `disk:` 段的注释（1 GB 足够）；
+- 用 **Cloudflare KV** 做持久化（免费额度够个人用，见下节）；
+- 每次重启后重新导入凭证（推荐先拿 master token 备份，面板支持直接导入）。
+
+改了 `ENCRYPTION_KEY` 之后，旧数据（本地文件或 KV 里的密文）都解不开，记得同时固定住它。
+
+### 凭证持久化：Cloudflare KV（免费）
+
+本地 JSON 文件仍然是写缓存，KV 作为权威存储：启动时 KV 有数据就覆盖本地，KV 为空就把本地迁移上去。清空 `/data` 之后凭证会自动从 KV 回来。
+
+1. Cloudflare Dashboard → Workers & Pages → KV → **Create namespace**（例如 `robin-gateway`），复制 Namespace ID；
+2. Account ID 在 Dashboard 右侧栏；
+3. My Profile → API Tokens → Create Token → 自定义权限：`Account` → `Workers KV Storage` → `Edit`，Account Resources 选自己的账号；
+4. 在 Render → Environment 添加三个变量（**并且固定 `ENCRYPTION_KEY`**，否则 KV 里的密文解不开）：
+   - `CF_ACCOUNT_ID`
+   - `CF_KV_NAMESPACE_ID`
+   - `CF_KV_API_TOKEN`
+5. 重启后日志会出现 `store: Cloudflare KV mode`；之后重启、休眠唤醒、清空 `/data` 都不丢凭证。
+
+免费额度：读 10 万次/天、写 1000 次/天、存储 1 GB。代码已经把 `uses`/`lastUsedAt` 这类计数合并写入（默认每 5 分钟，`KV_STATS_FLUSH_MS` 可调），正常个人使用远低于写入配额。
+
+注意事项：KV 是最终一致的（跨区域可能延迟几十秒），适合凭证这种低频写入；不要同时跑多个实例并发改同一份凭证。KV 里存的是 `enc:v1:…` 密文，但 `ENCRYPTION_KEY` 仍然要保密。
 
 也可以在 Cloudflare 上放一个 Worker/Caddy 反代到 Render，用 `gateway.example.com` 统一入口。
 

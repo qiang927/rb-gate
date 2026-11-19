@@ -3,12 +3,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
 import { decryptString, encryptString, hashPassword, randomId, randomToken, sha256, verifyPassword } from "./crypto.js";
+import { kvConfigured, kvGet, kvPut } from "./kv.js";
+import { logInfo, logWarn } from "./logger.js";
 
-const CREDENTIALS_FILE = () => path.join(config.dataDir, "credentials.json");
-const API_KEYS_FILE = () => path.join(config.dataDir, "api-keys.json");
-const ADMIN_FILE = () => path.join(config.dataDir, "admin.json");
-const SETTINGS_FILE = () => path.join(config.dataDir, "settings.json");
-const SESSION_SECRET_FILE = () => path.join(config.dataDir, "session.secret");
+const FILES = {
+  credentials: "credentials.json",
+  "api-keys": "api-keys.json",
+  admin: "admin.json",
+  settings: "settings.json",
+};
+const KV_KEYS = {
+  credentials: "robin/credentials",
+  "api-keys": "robin/api-keys",
+  admin: "robin/admin",
+  settings: "robin/settings",
+};
 
 function readJson(file, fallback) {
   try {
@@ -43,8 +52,12 @@ class Store {
   constructor() {
     this.cache = null;
     this.apiKeyCache = null;
+    this.adminCache = null;
     this.settingsCache = null;
     this._sessionSecret = "";
+    this.remote = false;
+    this.pending = {};
+    this.timers = {};
   }
 
   get sessionSecret() {
@@ -57,16 +70,124 @@ class Store {
     }
     if (this._sessionSecret) return this._sessionSecret;
     try {
-      this._sessionSecret = fs.readFileSync(SESSION_SECRET_FILE(), "utf8").trim();
+      this._sessionSecret = fs.readFileSync(path.join(config.dataDir, "session.secret"), "utf8").trim();
     } catch {
       this._sessionSecret = "";
     }
     if (!this._sessionSecret) {
       this._sessionSecret = crypto.randomBytes(48).toString("hex");
-      fs.mkdirSync(config.dataDir, { recursive: true });
-      fs.writeFileSync(SESSION_SECRET_FILE(), this._sessionSecret + "\n", { mode: 0o600 });
+      try {
+        fs.mkdirSync(config.dataDir, { recursive: true });
+        fs.writeFileSync(path.join(config.dataDir, "session.secret"), this._sessionSecret + "\n", { mode: 0o600 });
+      } catch {
+        // ephemeral filesystem — the derived/random value still works for this process
+      }
     }
     return this._sessionSecret;
+  }
+
+  // ---------- Storage backends ----------
+
+  /**
+   * Load state from Cloudflare KV (when configured) and mirror it into the
+   * local files. On the first run against an empty KV namespace the current
+   * local files are migrated up, so switching a live deployment is painless.
+   */
+  async init() {
+    // Force the file-backed getters to hydrate so we can compare/migrate.
+    this.credentials();
+    this.apiKeys();
+    this.settings();
+    const localAdmin = readJson(path.join(config.dataDir, FILES["admin"]), null);
+    if (localAdmin) this.adminCache = localAdmin;
+
+    if (!kvConfigured()) {
+      logInfo("store: local file mode (set CF_ACCOUNT_ID / CF_KV_NAMESPACE_ID / CF_KV_API_TOKEN to enable Cloudflare KV)");
+      return;
+    }
+    this.remote = true;
+    logInfo(`store: Cloudflare KV mode (namespace ${config.kv.namespaceId.slice(0, 8)}…)`);
+    for (const name of Object.keys(FILES)) {
+      try {
+        const raw = await kvGet(KV_KEYS[name]);
+        if (raw) {
+          const data = JSON.parse(raw);
+          this.applyRemote(name, data);
+          this.mirrorLocal(name, data);
+        } else {
+          const local = this.snapshot(name);
+          if (local) {
+            await kvPut(KV_KEYS[name], JSON.stringify(local));
+            logInfo(`store: migrated ${name} to KV`);
+          }
+        }
+      } catch (error) {
+        logWarn(`store: KV load failed for ${name}: ${error.message} — keeping local files`);
+      }
+    }
+  }
+
+  applyRemote(name, data) {
+    if (name === "credentials") this.cache = Array.isArray(data.credentials) ? data.credentials : [];
+    else if (name === "api-keys") this.apiKeyCache = Array.isArray(data.keys) ? data.keys : null;
+    else if (name === "admin") this.adminCache = data;
+    else if (name === "settings") this.settingsCache = data;
+  }
+
+  snapshot(name) {
+    if (name === "credentials") return { credentials: this.credentials() };
+    if (name === "api-keys") return { keys: this.apiKeys().filter((entry) => entry.source !== "env") };
+    if (name === "admin") return this.adminCache || readJson(path.join(config.dataDir, FILES["admin"]), null);
+    if (name === "settings") return this.settingsCache || null;
+    return null;
+  }
+
+  mirrorLocal(name, data) {
+    try {
+      writeJsonAtomic(path.join(config.dataDir, FILES[name]), data);
+    } catch {
+      // read-only or missing /data — KV is the source of truth anyway
+    }
+  }
+
+  /** Write-through: local file mirror + (debounced) KV push. */
+  persist(name, data, { immediate = false } = {}) {
+    this.mirrorLocal(name, data);
+    if (this.remote) this.scheduleRemote(name, data, immediate ? 0 : 400);
+  }
+
+  scheduleRemote(name, data, delayMs = 400) {
+    this.pending[name] = data;
+    const existing = this.timers[name];
+    if (existing && delayMs > 0) return;
+    if (existing) clearTimeout(existing);
+    this.timers[name] = setTimeout(() => {
+      this.timers[name] = null;
+      void this.flushRemote(name);
+    }, delayMs);
+    this.timers[name].unref?.();
+  }
+
+  async flushRemote(name) {
+    const data = this.pending[name];
+    if (!data) return;
+    this.pending[name] = null;
+    try {
+      await kvPut(KV_KEYS[name], JSON.stringify(data));
+    } catch (error) {
+      logWarn(`store: KV write failed for ${name}: ${error.message}`);
+    }
+  }
+
+  /** Flush every pending write (called on shutdown). */
+  async flush() {
+    for (const name of Object.keys(this.timers)) {
+      if (this.timers[name]) {
+        clearTimeout(this.timers[name]);
+        this.timers[name] = null;
+      }
+    }
+    await Promise.all(Object.keys(this.pending).map((name) => this.flushRemote(name)));
   }
 
   listApiKeys() {
@@ -87,11 +208,11 @@ class Store {
       }));
       return this.apiKeyCache;
     }
-    let data = readJson(API_KEYS_FILE(), null);
+    let data = readJson(path.join(config.dataDir, FILES["api-keys"]), null);
     if (!data || !Array.isArray(data.keys) || data.keys.length === 0) {
       const key = `sk-robin-${randomToken(24)}`;
       data = { keys: [{ id: randomId("key"), name: "default", key, hash: sha256(key), createdAt: new Date().toISOString() }] };
-      writeJsonAtomic(API_KEYS_FILE(), data);
+      this.persist("api-keys", data, { immediate: true });
     }
     this.apiKeyCache = data.keys;
     return this.apiKeyCache;
@@ -104,27 +225,23 @@ class Store {
   }
 
   addApiKey(name) {
-    const key = `sk-robin-${randomToken(24)}`;
-    const entry = { id: randomId("key"), name: name || "new key", key, hash: sha256(key), createdAt: new Date().toISOString() };
-    const data = readJson(API_KEYS_FILE(), { keys: [] });
-    data.keys = data.keys || [];
     if (config.apiKeys.length) {
       throw new Error("API keys are managed by the GATEWAY_API_KEYS environment variable");
     }
-    data.keys.push(entry);
-    writeJsonAtomic(API_KEYS_FILE(), data);
-    this.apiKeyCache = data.keys;
+    const key = `sk-robin-${randomToken(24)}`;
+    const entry = { id: randomId("key"), name: name || "new key", key, hash: sha256(key), createdAt: new Date().toISOString() };
+    const keys = [...this.apiKeys().filter((item) => item.source !== "env"), entry];
+    this.apiKeyCache = keys;
+    this.persist("api-keys", { keys }, { immediate: true });
     return entry;
   }
 
   removeApiKey(id) {
     if (config.apiKeys.length) throw new Error("API keys are managed by the GATEWAY_API_KEYS environment variable");
-    const data = readJson(API_KEYS_FILE(), { keys: [] });
-    const before = data.keys.length;
-    data.keys = (data.keys || []).filter((entry) => entry.id !== id);
-    writeJsonAtomic(API_KEYS_FILE(), data);
-    this.apiKeyCache = data.keys;
-    return before !== data.keys.length;
+    const before = this.apiKeys().length;
+    this.apiKeyCache = this.apiKeys().filter((entry) => entry.id !== id);
+    this.persist("api-keys", { keys: this.apiKeyCache }, { immediate: true });
+    return before !== this.apiKeyCache.length;
   }
 
   // ---------- Admin ----------
@@ -132,12 +249,14 @@ class Store {
     if (config.adminPassword) {
       return { passwordStored: hashPassword(config.adminPassword), generated: false, source: "env" };
     }
-    let data = readJson(ADMIN_FILE(), null);
+    if (this.adminCache) return this.adminCache;
+    let data = readJson(path.join(config.dataDir, FILES["admin"]), null);
     if (!data || !data.passwordStored) {
       const password = randomToken(9);
       data = { passwordStored: hashPassword(password), plaintextOnce: password, generated: true };
-      writeJsonAtomic(ADMIN_FILE(), data);
+      this.persist("admin", data, { immediate: true });
     }
+    this.adminCache = data;
     return data;
   }
 
@@ -147,23 +266,24 @@ class Store {
 
   /** Replace the stored admin password (ignored when ADMIN_PASSWORD is set). */
   setAdminPassword(password) {
-    const data = readJson(ADMIN_FILE(), null) || {};
+    const data = this.adminCache || readJson(path.join(config.dataDir, FILES["admin"]), null) || {};
     const next = { ...data, passwordStored: hashPassword(password), generated: false, updatedAt: Date.now() };
     delete next.plaintextOnce;
-    writeJsonAtomic(ADMIN_FILE(), next);
+    this.adminCache = next;
+    this.persist("admin", next, { immediate: true });
     return next;
   }
 
   verifyAdminPassword(password) {
-    const data = readJson(ADMIN_FILE(), null);
     if (config.adminPassword) return verifyPassword(password, hashPassword(config.adminPassword));
+    const data = this.adminCache || readJson(path.join(config.dataDir, FILES["admin"]), null);
     return verifyPassword(password, data?.passwordStored);
   }
 
   // ---------- Settings ----------
   settings() {
     if (this.settingsCache) return this.settingsCache;
-    this.settingsCache = readJson(SETTINGS_FILE(), {
+    this.settingsCache = readJson(path.join(config.dataDir, FILES["settings"]), {
       gatewayModelAliases: {},
       upstreamBase: config.upstreamBase,
       locale: "zh",
@@ -173,15 +293,15 @@ class Store {
 
   updateSettings(patch) {
     const next = { ...this.settings(), ...patch };
-    writeJsonAtomic(SETTINGS_FILE(), next);
     this.settingsCache = next;
+    this.persist("settings", next, { immediate: true });
     return next;
   }
 
   // ---------- Credentials ----------
   credentials() {
     if (!this.cache) {
-      const data = readJson(CREDENTIALS_FILE(), { credentials: [] });
+      const data = readJson(path.join(config.dataDir, FILES["credentials"]), { credentials: [] });
       this.cache = Array.isArray(data.credentials) ? data.credentials : [];
     }
     return this.cache;
@@ -205,7 +325,7 @@ class Store {
     const stored = { ...cred };
     if (index >= 0) list[index] = stored;
     else list.push(stored);
-    writeJsonAtomic(CREDENTIALS_FILE(), { credentials: list });
+    this.persist("credentials", { credentials: list }, { immediate: true });
     return sanitizeCredential(stored);
   }
 
@@ -251,7 +371,7 @@ class Store {
     const index = list.findIndex((cred) => cred.id === id);
     if (index < 0) return false;
     list.splice(index, 1);
-    writeJsonAtomic(CREDENTIALS_FILE(), { credentials: list });
+    this.persist("credentials", { credentials: list }, { immediate: true });
     return true;
   }
 
@@ -260,7 +380,17 @@ class Store {
     if (!cred) return;
     cred.lastUsedAt = new Date().toISOString();
     cred.uses = (cred.uses || 0) + 1;
-    this.saveCredential(cred);
+    if (this.remote) {
+      // Counters are not worth a KV write per request: batch them.
+      this.scheduleRemote("credentials", { credentials: this.credentials() }, config.kv.statsFlushMs);
+      try {
+        writeJsonAtomic(path.join(config.dataDir, FILES["credentials"]), { credentials: this.credentials() });
+      } catch {
+        // ignore
+      }
+    } else {
+      this.persist("credentials", { credentials: this.credentials() });
+    }
   }
 
   markError(id, message, { cooldownMs = config.cooldownMs } = {}) {
@@ -270,7 +400,7 @@ class Store {
     cred.failures = (cred.failures || 0) + 1;
     cred.status = "error";
     cred.cooldownUntil = Date.now() + cooldownMs;
-    this.saveCredential(cred);
+    this.persist("credentials", { credentials: this.credentials() }, { immediate: true });
   }
 
   markOk(id) {
@@ -280,7 +410,7 @@ class Store {
     cred.failures = 0;
     cred.status = "active";
     cred.cooldownUntil = 0;
-    this.saveCredential(cred);
+    this.persist("credentials", { credentials: this.credentials() }, { immediate: true });
   }
 }
 

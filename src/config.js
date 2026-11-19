@@ -65,6 +65,18 @@ export const config = {
     process.env.USER_AGENT ||
     "antigravity/hub/2.33.0 (aidev_client; os_type=darwin; arch=arm64; cl=1023160026)",
   logRequests: bool(process.env.LOG_REQUESTS, false),
+
+  // Optional Cloudflare KV backing store: keeps credentials across restarts
+  // when the host has no persistent disk (Render free tier and friends).
+  kv: {
+    accountId: (process.env.CF_ACCOUNT_ID || "").trim(),
+    namespaceId: (process.env.CF_KV_NAMESPACE_ID || "").trim(),
+    apiToken: (process.env.CF_KV_API_TOKEN || "").trim(),
+    baseUrl: (process.env.CF_KV_BASE_URL || "https://api.cloudflare.com/client/v4").replace(/\/+$/, ""),
+    // Usage counters (uses/lastUsedAt) are flushed less eagerly to stay well
+    // inside the KV free tier write quota (1k writes/day).
+    statsFlushMs: int(process.env.KV_STATS_FLUSH_MS, 300_000),
+  },
 };
 
 export function ensureConfigWarnings() {

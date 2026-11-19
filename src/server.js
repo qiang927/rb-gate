@@ -641,6 +641,8 @@ app.use((error, req, res, next) => {
   sendOpenaiError(res, status, error?.message || "internal error", { type: "server_error", code: "internal_error" });
 });
 
+await store.init();
+
 const server = app.listen(config.port, config.host, () => {
   const admin = store.admin();
   const keys = store.listApiKeys();
@@ -671,7 +673,9 @@ const server = app.listen(config.port, config.host, () => {
 
 function shutdown(signal) {
   console.log(`${signal} received, shutting down`);
-  server.close(() => process.exit(0));
+  server.close(() => {
+    void store.flush().finally(() => process.exit(0));
+  });
   setTimeout(() => process.exit(0), 5000).unref();
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));
