@@ -4,6 +4,8 @@ import express from "express";
 import { config, ensureConfigWarnings } from "./config.js";
 import { provisionOAuth, provisionRobin, testCredential } from "./credentials.js";
 import { buildAuthUrl, createPkcePair, UpstreamError } from "./google.js";
+import { GoogleWebSession, WEB_MODELS, isWebModel } from "./googleweb.js";
+import { decryptString } from "./crypto.js";
 import { listModels, resolveModelId } from "./models.js";
 import { openStream, withCredential } from "./router.js";
 import { store } from "./store.js";
@@ -140,19 +142,32 @@ app.get("/health", (req, res) => {
 app.get("/v1/models", (req, res) => {
   res.json({
     object: "list",
-    data: listModels().map((model) => ({
-      id: model.id,
-      object: "model",
-      created: 1735689600,
-      owned_by: model.ownedBy || "google",
-    })),
+    data: [
+      ...listModels().map((model) => ({
+        id: model.id,
+        object: "model",
+        created: 1735689600,
+        owned_by: model.ownedBy || "google",
+      })),
+      ...Object.keys(WEB_MODELS).map((id) => ({
+        id,
+        object: "model",
+        created: 1735689600,
+        owned_by: "google-web",
+      })),
+    ],
   });
 });
 
 app.get("/v1/models/:id", (req, res) => {
   const model = listModels().find((item) => item.id === req.params.id);
-  if (!model) return sendOpenaiError(res, 404, `model ${req.params.id} not found`, { code: "model_not_found" });
-  res.json({ id: model.id, object: "model", created: 1735689600, owned_by: model.ownedBy || "google" });
+  if (model) {
+    return res.json({ id: model.id, object: "model", created: 1735689600, owned_by: model.ownedBy || "google" });
+  }
+  if (isWebModel(req.params.id)) {
+    return res.json({ id: req.params.id, object: "model", created: 1735689600, owned_by: "google-web" });
+  }
+  return sendOpenaiError(res, 404, `model ${req.params.id} not found`, { code: "model_not_found" });
 });
 
 app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
@@ -161,6 +176,10 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
     return sendOpenaiError(res, 400, "messages must be a non-empty array", { code: "invalid_messages" });
   }
   const stream = Boolean(body.stream);
+  if (isWebModel(body.model)) {
+    return handleWebChat(req, res, body, body.model, stream);
+  }
+
   const controller = new AbortController();
   res.on("close", () => controller.abort(new Error("client closed the connection")));
 
@@ -266,6 +285,105 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
   }
 });
 
+
+const webSessions = new Map();
+
+function findWebCredential() {
+  const creds = store.credentials().filter((cred) => cred.masterTokenEnc);
+  if (!creds.length) return null;
+  return creds.find((cred) => cred.status !== "disabled") || creds[0];
+}
+
+function webSessionFor(cred) {
+  const cacheKey = `${cred.id}:${cred.updatedAt || ""}`;
+  let session = webSessions.get(cacheKey);
+  if (!session) {
+    session = new GoogleWebSession({
+      email: cred.email,
+      masterToken: decryptString(cred.masterTokenEnc, config.dataDir),
+      androidId: cred.androidId,
+      app: cred.app,
+      clientSig: cred.clientSig,
+    });
+    webSessions.set(cacheKey, session);
+  }
+  return session;
+}
+
+function webPrompt(messages) {
+  const parts = [];
+  for (const message of messages) {
+    let text = "";
+    if (typeof message.content === "string") text = message.content;
+    else if (Array.isArray(message.content)) {
+      text = message.content
+        .map((part) => (typeof part === "string" ? part : part?.type === "text" ? part.text : ""))
+        .filter(Boolean)
+        .join("\n");
+    }
+    if (!text) continue;
+    if (message.role === "system") parts.push("System: " + text);
+    else if (message.role === "assistant") parts.push("Assistant: " + text);
+    else parts.push("User: " + text);
+  }
+  return parts.join("\n\n");
+}
+
+async function handleWebChat(req, res, body, model, stream) {
+  const cred = findWebCredential();
+  if (!cred) {
+    return sendOpenaiError(res, 503, "no web credential: import a robin credential (contains master token) first", { code: "no_web_credential" });
+  }
+  const session = webSessionFor(cred);
+  const prompt = webPrompt(Array.isArray(body.messages) ? body.messages : []);
+  const temporary = Boolean(body.temporary || body.web_temporary);
+  const controller = new AbortController();
+  res.on("close", () => controller.abort(new Error("client closed the connection")));
+
+  if (!stream) {
+    try {
+      const text = await session.complete(prompt, { model, temporary });
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      return res.json(buildOpenaiResponse({ text, model, toolCalls: [] }));
+    } catch (error) {
+      if (controller.signal.aborted) return res.end();
+      const status = error.status || 502;
+      logError(`web chat failed (${status}): ${error.message}`);
+      return sendOpenaiError(res, status, error.message, { type: "web_error", code: error.code || "web_failed" });
+    }
+  }
+
+  const id = `chatcmpl-${crypto.randomBytes(12).toString("hex")}`;
+  const created = Math.floor(Date.now() / 1000);
+  res.writeHead(200, openaiSseHeaders());
+  const send = (chunk) => res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+  let wroteRole = false;
+  try {
+    for await (const delta of session.chat(prompt, { model, temporary })) {
+      if (controller.signal.aborted) break;
+      if (!wroteRole) {
+        send(buildOpenaiChunk({ id, model, created, delta: { role: "assistant" } }));
+        wroteRole = true;
+      }
+      send(buildOpenaiChunk({ id, model, created, delta: { content: delta } }));
+    }
+    send(buildOpenaiChunk({ id, model, created, delta: {}, finishReason: "stop" }));
+    if (body.stream_options?.include_usage) {
+      send(buildOpenaiChunk({ id, model, created, delta: {}, finishReason: null, usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } }));
+    }
+    res.write("data: [DONE]\n\n");
+    res.end();
+  } catch (error) {
+    logError(`[web stream] ${error.message}`);
+    if (!res.headersSent) {
+      return sendOpenaiError(res, error.status || 502, error.message, { type: "web_error", code: error.code || "web_failed" });
+    }
+    res.write(`data: ${JSON.stringify({ error: { message: error.message, type: "web_error" } })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }
+}
+
 function mapFinish(reason) {
   switch (reason) {
     case "MAX_TOKENS":
@@ -346,7 +464,10 @@ app.get("/admin/api/overview", requireAdmin, (req, res) => {
   res.json({
     credentials,
     stats,
-    models: listModels(),
+    models: [
+      ...listModels(),
+      ...Object.entries(WEB_MODELS).map(([id, cfg]) => ({ id, display_name: cfg.label, ownedBy: "google-web" })),
+    ],
     apiKeys: store.listApiKeys(),
     admin: { source: store.adminSource() },
     settings: {

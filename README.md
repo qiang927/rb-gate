@@ -1,6 +1,6 @@
 # robin-gateway
 
-把 Google Code Assist（Antigravity 上游）包装成 **OpenAI 兼容 API** 的自建网关：多凭证池、自动续期、管理面板、一键部署到 Render。
+把 Google 的两种账号级上游包装成 **OpenAI 兼容 API** 的自建网关：Code Assist（Antigravity 模型）与 Gemini 网页版（猫站 robin 同款链路），带多凭证池、自动续期、管理面板，可部署到 Render。
 
 它复刻的是 catiecli「robin」通道的凭证原理，而不是把请求转发给猫站：
 
@@ -21,6 +21,7 @@ Gemini / Claude 模型  →  翻译成 OpenAI Chat Completions 响应
 
 - **OpenAI 兼容**：`POST /v1/chat/completions`（流式/非流式）、`GET /v1/models`，支持 system、多轮、图片（data URL）、function calling、JSON mode、`reasoning_content`（thinking 模型）。
 - **多凭证池**：按 Google 账号导入多条凭证；轮询 + 失败计数排序，401/403/429/5xx 自动换号并冷却，400 参数错误不重试。
+- **两条上游**：① Code Assist（`cloudcode-pa`，Antigravity 的 15 个模型）；② Gemini 网页版（`web-gemini-*`，走 `StreamGenerate` 私有 RPC，对话会写进 Gemini 网页/客户端历史）。
 - **两种导入方式**：① robin 方式（浏览器 `oauth_token` → master token，长期有效）；② 标准 Antigravity OAuth 授权码（refresh token 自动续期）。
 - **管理面板** `/admin/`：凭证增删/测试/禁用、API Key 管理、模型表、运行设置。
 - **零数据库**：JSON 文件 + 原子写；密钥用 `ENCRYPTION_KEY` 加密；admin 密码 scrypt。
@@ -70,6 +71,43 @@ ADMIN_PASSWORD=your-password npm start
 - 把 `DATA_DIR` 挂到任意持久卷，并固定 `ENCRYPTION_KEY`（否则旧凭证解密失败）。
 
 也可以在 Cloudflare 上放一个 Worker/Caddy 反代到 Render，用 `gateway.example.com` 统一入口。
+
+## Gemini 网页版通道（`web-` 模型）
+
+这是猫站 robin 后端实际使用的链路，不经过 `cloudcode-pa`，所以不会遇到「Cloud Code Private API has not been used in project …」的 403：
+
+```
+master token
+  │  perform_oauth(service="oauth2:https://www.google.com/accounts/OAuthLogin")
+  ▼
+Bearer (ya29…)
+  │  GET https://accounts.google.com/OAuthLogin?source=ChromiumBrowser&issueuberauth=1
+  ▼
+uberauth
+  │  GET https://accounts.google.com/MergeSession?service=mail&continue=https://www.google.com&uberauth=…
+  ▼
+SID / APISID / SAPISID cookies
+  │  GET https://gemini.google.com/app   →  抓 SNlM0e (at) / cfb2h (bl)
+  ▼
+POST /_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate
+```
+
+可用模型：
+
+| 模型 | 说明 |
+|---|---|
+| `web-gemini-3.7-flash` | 默认，全能 |
+| `web-gemini-3.5-flash-thinking` | 深度思考，长输出 |
+| `web-gemini-3.1-pro` | Pro |
+| `web-gemini-auto` | 自动选择 |
+| `web-gemini-flash-lite` | 轻量快速 |
+
+使用前提：凭证池里至少有一条带 master token 的 robin 凭证（面板「导入并验证」成功过一次即可；即使 Code Assist 的 `loadCodeAssist` 报 403，web 通道仍然可用，因为它是另一条链路）。
+
+- 请求体加 `"temporary": true`（或 `"web_temporary": true`）走临时对话，**不写入** Gemini 历史。
+- 默认 `temporary=false`：对话会出现在该账号的 **Gemini 网页/客户端历史**里。这是账号级调用的固有属性，不是网关 bug。
+- web 通道目前只支持纯文本对话；工具调用、图片输入不支持（返回纯文本）。
+- 该链路依赖 Gemini 网页版内部 RPC，Google 改版后可能失效，需要跟版更新 `src/googleweb.js`。
 
 ## 客户端接入
 
@@ -152,11 +190,13 @@ test/            node:test 单测（签名、转换、SSE、错误分类）
 
 - ✅ 本地 14 个单测通过：gpsoauth 签名格式、OpenAI→Gemini 转换（含工具/图片/JSON/thinking）、SSE 解析、错误分类。
 - ✅ 用 mock 上游端到端验证了 `/v1/chat/completions` 非流式/流式、模型别名、API Key 鉴权。
-- ⚠️ **真实上游未验证**：需要你自己的 Google 账号 `oauth_token`。`exchange_token` → master token → mint bearer → `cloudcode-pa` 这条链依赖 Google 对 client/app 身份的校验，若 mint 出的 token 被拒（403/401），可在面板里换 `ROBIN_APP`/`ROBIN_CLIENT_SIG` 或改用 OAuth 导入。
+- ✅ 真实凭证验证：`oauth_token → master token → OAuthLogin → MergeSession → SID cookie → StreamGenerate` 全链路跑通，`web-gemini-3.7-flash` 非流式与流式均返回真实回复（本机实测）。
+- ⚠️ Code Assist 链路：`mint` 出的 Bearer 可能被 `cloudcode-pa` 拒绝（403 Cloud Code Private API not enabled），这是 Android app 身份所属 GCP 项目的问题，换 app/sig 未必能解；此时请用 `web-` 模型或标准 OAuth 导入。
 
 ## 风险与合规
 
 - **不要把 `oauth_token`、master token、refresh token 提交到 Git**：本项目的凭证只存在 `DATA_DIR`（已加入 `.gitignore`），导入走面板或环境变量，仓库里不应出现任何真实凭证。
 - 用第三方逆向流程（Code Assist/Antigravity 的 Android 客户端身份）调用 Google 模型，**违反 Google 服务条款**，存在封号风险（社区已有案例）。请只用自己的账号，不要对外分发或售卖访问。
 - master token 权限等价账号登录态，泄露后攻击者可访问该 Google 账号的大部分服务，撤销只能改密码。
+- `web-` 通道调用的是 Gemini 网页版私有接口，风控比 Code Assist 更严，异常频率/指纹可能导致账号被要求验证或封禁。
 - 本服务的凭证只存在你的实例上，不经过猫站或任何第三方中转。
