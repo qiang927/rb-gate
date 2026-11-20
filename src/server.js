@@ -687,6 +687,33 @@ app.post("/admin/api/credentials/import-pggo", requireAdmin, async (req, res) =>
   }
 });
 
+app.post("/admin/api/pggo/probe", requireAdmin, async (req, res) => {
+  const { model = "pggo-gemini-4-neon", tier = "", prompt = "Reply with OK" } = req.body || {};
+  const target = lookupPggoModel(model);
+  if (!target) return res.status(400).json({ ok: false, error: `unknown pggo model ${model}` });
+  const credential = findPggoCredential();
+  if (!credential) return res.status(400).json({ ok: false, error: "no pggo credential" });
+  let cookie;
+  try {
+    cookie = decryptString(credential.cookieEnc, config.dataDir);
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: `cookie decrypt failed: ${error.message}` });
+  }
+  try {
+    const started = Date.now();
+    const result = await completePggoChat({
+      cookie, model: target, body: { messages: [{ role: "user", content: prompt }], max_tokens: 512 },
+      tier: tier || undefined,
+    });
+    res.json({
+      ok: true, model, tier: tier || config.waa.defaultTier, elapsedMs: Date.now() - started,
+      text: String(result.text || "").slice(0, 400), finishReason: result.finishReason,
+    });
+  } catch (error) {
+    res.json({ ok: false, model, tier: tier || config.waa.defaultTier, code: error.code || "pggo_failed", error: error.message });
+  }
+});
+
 app.post("/admin/api/credentials/:id/test", requireAdmin, async (req, res) => {
   try {
     const result = await testCredential(req.params.id);
