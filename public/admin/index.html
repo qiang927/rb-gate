@@ -90,6 +90,11 @@
   .badge.disabled { color: var(--muted); }
   .badge.robin { color: #9db4ff; border-color: #2a3760; background: #121a30; }
   .badge.oauth { color: #e0b3ff; border-color: #402a60; background: #1a1230; }
+  .badge.pggo { color: #7dd3a8; border-color: #1f4735; background: #0f1f18; }
+  .cred-group + .cred-group { margin-top: 20px; }
+  .group-head { margin-bottom: 8px; }
+  .group-head h4 { margin: 0 0 2px; font-size: 14px; }
+  .group-head p { margin: 0; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .log-box { margin: 0; padding: 12px; max-height: 360px; overflow: auto; background: #0b0e14; border: 1px solid #232b3a; border-radius: 10px; font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-all; color: #c8d2e0; }
   .toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); background: #1c2230; border: 1px solid #33405a; padding: 10px 16px; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,.5); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; max-width: min(90vw, 720px); }
@@ -250,8 +255,26 @@
 
         <div class="card">
           <div class="row" style="justify-content:space-between; margin-bottom:8px">
+            <strong>导入 pggo 凭证</strong>
+            <span class="badge pggo">Cookie 直连网页版</span>
+          </div>
+          <p class="hint">
+            在已登录 Gemini 的浏览器里复制整段 Cookie（F12 → Application → Cookies，或从任意请求的 Cookie 头复制），
+            粘贴到这里。服务端会用自己的 IP 直接请求 <code>gemini.google.com</code>，不依赖 master token。
+          </p>
+          <div class="field"><label>Google 邮箱（可选，仅作备注）</label><input id="pggoEmail" type="email" placeholder="you@gmail.com" /></div>
+          <div class="field"><label>Cookie</label><textarea id="pggoCookie" placeholder="SID=…; __Secure-1PSID=…; …" spellcheck="false" style="min-height:90px"></textarea></div>
+          <div class="field"><label>备注（可选）</label><input id="pggoLabel" placeholder="备用号 / 小号" /></div>
+          <div class="row">
+            <button class="primary" id="importPggoBtn">导入并验证</button>
+            <span class="hint">会先访问一次 gemini.google.com，确认 Cookie 有效再保存</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="row" style="justify-content:space-between; margin-bottom:8px">
             <strong>OAuth 授权导入</strong>
-            <span class="badge oauth">Antigravity 客户端流程</span>
+            <span class="badge oauth">AGY 组 · Antigravity 流程</span>
           </div>
           <p class="hint">
             走标准 Google OAuth（与 Antigravity / Gemini CLI 相同的 client），拿到 refresh_token 后由服务端自动刷新。
@@ -485,47 +508,69 @@
     }
   }
 
+  const CRED_GROUPS = [
+    { id: "robin", title: "robin 组", note: "oauth_token → master token → mint → 网页版 Gemini。一次导入、长期自动续期。" },
+    { id: "pggo", title: "pggo 组", note: "直接粘贴浏览器 Cookie，网关用自己的 IP 请求网页版。Cookie 过期后需要重新导入。" },
+    { id: "agy", title: "AGY 组", note: "Antigravity / Code Assist OAuth，走 Code Assist 上游（高阶模型）。" },
+  ];
+
+  function credRow(cred) {
+    const cooling = cred.cooldownUntil && cred.cooldownUntil > Date.now();
+    const statusText = cooling ? "冷却中" : cred.status || "active";
+    const statusClass = cooling ? "" : esc(cred.status || "active");
+    return `<tr>
+      <td data-label="账号">
+        <div><strong>${esc(cred.label || cred.email || cred.id)}</strong></div>
+        <div class="small muted">${esc(cred.email || "")}</div>
+      </td>
+      <td data-label="类型"><span class="badge ${esc(cred.type)}">${esc(cred.type)}</span></td>
+      <td data-label="状态"><span class="badge ${statusClass}">${statusText}</span></td>
+      <td data-label="项目 / 层级" class="small">
+        <div class="mono">${esc(cred.projectId || "—")}</div>
+        <div class="muted">${esc(cred.tier || "")}</div>
+      </td>
+      <td data-label="用量" class="small">
+        <div>${cred.uses || 0} 次</div>
+        <div class="muted">${esc(ago(cred.lastUsedAt))}</div>
+      </td>
+      <td data-label="最近错误" class="small" style="max-width:240px">
+        ${cred.lastError ? `<span style="color:var(--red)">${esc(String(cred.lastError).slice(0, 160))}</span>` : '<span class="muted">—</span>'}
+      </td>
+      <td class="actions">
+        <div class="row" style="gap:6px; flex-wrap:nowrap">
+          <button data-act="test" data-id="${esc(cred.id)}">测试</button>
+          ${cred.type === "robin" ? `<button data-act="appsig" data-id="${esc(cred.id)}" title="换一组 app/client_sig 重新 mint">改 app</button>` : ""}
+          <button data-act="toggle" data-id="${esc(cred.id)}" data-status="${esc(cred.status)}">${cred.status === "disabled" ? "启用" : "禁用"}</button>
+          <button class="danger" data-act="delete" data-id="${esc(cred.id)}">删除</button>
+        </div>
+      </td>
+    </tr>`;
+  }
+
   function renderCredentials(creds) {
     const wrap = $("credsTableWrap");
     if (!creds.length) {
-      wrap.innerHTML = '<div class="empty">还没有凭证。先导入一个 robin 凭证。</div>';
+      wrap.innerHTML = '<div class="empty">还没有凭证。先在下面导入 robin / pggo 凭证，或走 OAuth 授权。</div>';
       return;
     }
-    const rows = creds.map((cred) => {
-      const cooling = cred.cooldownUntil && cred.cooldownUntil > Date.now();
-      const statusText = cooling ? "冷却中" : cred.status || "active";
-      const statusClass = cooling ? "" : esc(cred.status || "active");
-      return `<tr>
-        <td data-label="账号">
-          <div><strong>${esc(cred.label || cred.email || cred.id)}</strong></div>
-          <div class="small muted">${esc(cred.email || "")}</div>
-        </td>
-        <td data-label="类型"><span class="badge ${esc(cred.type)}">${esc(cred.type)}</span></td>
-        <td data-label="状态"><span class="badge ${statusClass}">${statusText}</span></td>
-        <td data-label="项目 / 层级" class="small">
-          <div class="mono">${esc(cred.projectId || "—")}</div>
-          <div class="muted">${esc(cred.tier || "")}</div>
-        </td>
-        <td data-label="用量" class="small">
-          <div>${cred.uses || 0} 次</div>
-          <div class="muted">${esc(ago(cred.lastUsedAt))}</div>
-        </td>
-        <td data-label="最近错误" class="small" style="max-width:240px">
-          ${cred.lastError ? `<span style="color:var(--red)">${esc(String(cred.lastError).slice(0, 160))}</span>` : '<span class="muted">—</span>'}
-        </td>
-        <td class="actions">
-          <div class="row" style="gap:6px; flex-wrap:nowrap">
-            <button data-act="test" data-id="${esc(cred.id)}">测试</button>
-            ${cred.type === "robin" ? `<button data-act="appsig" data-id="${esc(cred.id)}" title="换一组 app/client_sig 重新 mint">改 app</button>` : ""}
-            <button data-act="toggle" data-id="${esc(cred.id)}" data-status="${esc(cred.status)}">${cred.status === "disabled" ? "启用" : "禁用"}</button>
-            <button class="danger" data-act="delete" data-id="${esc(cred.id)}">删除</button>
-          </div>
-        </td>
-      </tr>`;
+    const byGroup = { robin: [], pggo: [], agy: [] };
+    for (const cred of creds) {
+      const group = cred.group === "pggo" || cred.group === "agy" ? cred.group : "robin";
+      byGroup[group].push(cred);
+    }
+    wrap.innerHTML = CRED_GROUPS.map((group) => {
+      const list = byGroup[group.id] || [];
+      const body = list.length
+        ? `<table class="cards">
+            <thead><tr><th>账号</th><th>类型</th><th>状态</th><th>项目 / 层级</th><th>用量</th><th>最近错误</th><th></th></tr></thead>
+            <tbody>${list.map(credRow).join("")}</tbody>
+          </table>`
+        : '<div class="empty small">这个组还没有凭证。</div>';
+      return `<section class="cred-group" data-group="${group.id}">
+        <div class="group-head"><h4>${group.title} <span class="muted small">${list.length}</span></h4><p class="small muted">${group.note}</p></div>
+        ${body}
+      </section>`;
     }).join("");
-    wrap.innerHTML = `<table class="cards">
-      <thead><tr><th>账号</th><th>类型</th><th>状态</th><th>项目 / 层级</th><th>用量</th><th>最近错误</th><th></th></tr></thead>
-      <tbody>${rows}</tbody></table>`;
     wrap.querySelectorAll("button[data-act]").forEach((btn) => {
       btn.addEventListener("click", () => handleCredAction(btn.dataset.act, btn.dataset.id, btn.dataset.status));
     });
@@ -536,7 +581,8 @@
       if (act === "test") {
         toast("测试中…");
         const result = await api(`/admin/api/credentials/${encodeURIComponent(id)}/test`, { method: "POST" });
-        toast(`可用 · project=${result.projectId || "?"} tier=${result.tier || "?"}`);
+        const detail = result.channel === "pggo" ? "Cookie 有效" : `project=${result.projectId || "?"} tier=${result.tier || "?"}`;
+        toast(`可用 · ${detail}`);
         await loadOverview();
       } else if (act === "appsig") {
         const app = prompt("Android app 包名", "com.google.android.gms");
@@ -600,13 +646,17 @@
       wrap.innerHTML = '<div class="empty">没有模型。</div>';
       return;
     }
-    const rows = models.map((model) => `<tr>
-      <td data-label="模型" class="mono">${esc(model.id)}</td>
-      <td data-label="名称" class="small">${esc(model.display_name || "")}</td>
-      <td data-label="上下文" class="small muted">${model.context_length ? model.context_length.toLocaleString() : "—"}</td>
-      <td data-label="最大输出" class="small muted">${model.max_completion_tokens ? model.max_completion_tokens.toLocaleString() : "—"}</td>
-    </tr>`).join("");
-    wrap.innerHTML = `<table class="cards"><thead><tr><th>模型</th><th>名称</th><th>上下文</th><th>最大输出</th></tr></thead><tbody>${rows}</tbody></table>`;
+    const rows = models.map((model) => {
+      const groups = Array.isArray(model.groups) && model.groups.length ? model.groups.join(" / ") : "—";
+      return `<tr>
+        <td data-label="模型" class="mono">${esc(model.id)}</td>
+        <td data-label="名称" class="small">${esc(model.display_name || "")}</td>
+        <td data-label="可用组" class="small"><span class="badge">${esc(groups)}</span></td>
+        <td data-label="上下文" class="small muted">${model.context_length ? model.context_length.toLocaleString() : "—"}</td>
+        <td data-label="最大输出" class="small muted">${model.max_completion_tokens ? model.max_completion_tokens.toLocaleString() : "—"}</td>
+      </tr>`;
+    }).join("");
+    wrap.innerHTML = `<table class="cards"><thead><tr><th>模型</th><th>名称</th><th>可用组</th><th>上下文</th><th>最大输出</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
   async function changePassword() {
@@ -704,6 +754,30 @@
     } finally {
       btn.disabled = false;
       btn.textContent = "直接导入";
+    }
+  });
+
+  $("importPggoBtn").addEventListener("click", async () => {
+    const cookie = $("pggoCookie").value.trim();
+    const email = $("pggoEmail").value.trim();
+    const label = $("pggoLabel").value.trim();
+    if (!cookie) return toast("请先粘贴 Cookie", true);
+    const btn = $("importPggoBtn");
+    btn.disabled = true;
+    btn.textContent = "验证中…";
+    try {
+      await api("/admin/api/credentials/import-pggo", {
+        method: "POST",
+        body: JSON.stringify({ cookie, email, label }),
+      });
+      $("pggoCookie").value = "";
+      toast("导入成功，pggo 组已就绪");
+      await loadOverview();
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "导入并验证";
     }
   });
 

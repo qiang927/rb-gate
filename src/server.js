@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import express from "express";
 import { config, ensureConfigWarnings } from "./config.js";
-import { importMaster, provisionOAuth, provisionRobin, testCredential } from "./credentials.js";
+import { importMaster, importPggo, provisionOAuth, provisionRobin, testCredential } from "./credentials.js";
 import { buildAuthUrl, createPkcePair, UpstreamError } from "./google.js";
 import { GoogleWebSession, WEB_MODELS, isWebModel } from "./googleweb.js";
 import { decryptString } from "./crypto.js";
@@ -154,6 +154,7 @@ app.get("/v1/models", (req, res) => {
         object: "model",
         created: 1735689600,
         owned_by: "google-web",
+        groups: ["robin", "pggo"],
       })),
     ],
   });
@@ -165,7 +166,7 @@ app.get("/v1/models/:id", (req, res) => {
     return res.json({ id: model.id, object: "model", created: 1735689600, owned_by: model.ownedBy || "google" });
   }
   if (isWebModel(req.params.id)) {
-    return res.json({ id: req.params.id, object: "model", created: 1735689600, owned_by: "google-web" });
+    return res.json({ id: req.params.id, object: "model", created: 1735689600, owned_by: "google-web", groups: ["robin", "pggo"] });
   }
   return sendOpenaiError(res, 404, `model ${req.params.id} not found`, { code: "model_not_found" });
 });
@@ -289,22 +290,33 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
 const webSessions = new Map();
 
 function findWebCredential() {
-  const creds = store.credentials().filter((cred) => cred.masterTokenEnc);
+  const creds = store.credentials().filter((cred) => cred.masterTokenEnc || cred.cookieEnc);
   if (!creds.length) return null;
-  return creds.find((cred) => cred.status !== "disabled") || creds[0];
+  const pool = creds.filter((cred) => cred.status !== "disabled");
+  const usable = pool.length ? pool : creds;
+  // Least-recently used first, so multiple robin/pggo credentials rotate.
+  usable.sort((a, b) => String(a.lastUsedAt || "").localeCompare(String(b.lastUsedAt || "")));
+  return usable[0];
 }
 
 function webSessionFor(cred) {
   const cacheKey = `${cred.id}:${cred.updatedAt || ""}`;
   let session = webSessions.get(cacheKey);
   if (!session) {
-    session = new GoogleWebSession({
-      email: cred.email,
-      masterToken: decryptString(cred.masterTokenEnc, config.dataDir),
-      androidId: cred.androidId,
-      app: config.webApp,
-      clientSig: config.webSig,
-    });
+    if (cred.cookieEnc) {
+      session = new GoogleWebSession({
+        email: cred.email,
+        cookie: decryptString(cred.cookieEnc, config.dataDir),
+      });
+    } else {
+      session = new GoogleWebSession({
+        email: cred.email,
+        masterToken: decryptString(cred.masterTokenEnc, config.dataDir),
+        androidId: cred.androidId,
+        app: config.webApp,
+        clientSig: config.webSig,
+      });
+    }
     webSessions.set(cacheKey, session);
   }
   return session;
@@ -332,7 +344,7 @@ function webPrompt(messages) {
 async function handleWebChat(req, res, body, model, stream) {
   const cred = findWebCredential();
   if (!cred) {
-    return sendOpenaiError(res, 503, "no web credential: import a robin credential (contains master token) first", { code: "no_web_credential" });
+    return sendOpenaiError(res, 503, "no web credential: import a robin (oauth_token) or pggo (cookie) credential first", { code: "no_web_credential" });
   }
   const session = webSessionFor(cred);
   const prompt = webPrompt(Array.isArray(body.messages) ? body.messages : []);
@@ -466,7 +478,7 @@ app.get("/admin/api/overview", requireAdmin, (req, res) => {
     stats,
     models: [
       ...listModels(),
-      ...Object.entries(WEB_MODELS).map(([id, cfg]) => ({ id, display_name: cfg.label, ownedBy: "google-web" })),
+      ...Object.entries(WEB_MODELS).map(([id, cfg]) => ({ id, display_name: cfg.label, ownedBy: "google-web", groups: ["robin", "pggo"] })),
     ],
     apiKeys: store.listApiKeys(),
     admin: { source: store.adminSource() },
@@ -517,6 +529,18 @@ app.post("/admin/api/credentials/import-master", requireAdmin, async (req, res) 
     res.json(result);
   } catch (error) {
     logError(`master import failed (${email || "?"}): ${error.message}`);
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/admin/api/credentials/import-pggo", requireAdmin, async (req, res) => {
+  const { cookie, email = "", label = "" } = req.body || {};
+  try {
+    const result = await importPggo({ cookie, email, label });
+    logInfo(`pggo import ok (${email || result.credential.id})`);
+    res.json(result);
+  } catch (error) {
+    logError(`pggo import failed (${email || "?"}): ${error.message}`);
     res.status(400).json({ ok: false, error: error.message });
   }
 });

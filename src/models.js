@@ -32,6 +32,7 @@ export function listModels() {
       object: "model",
       created: model.created || 0,
       owned_by: "antigravity",
+      groups: ["agy"],
       display_name: model.display_name || model.id,
       context_length: model.context_length,
       max_completion_tokens: model.max_completion_tokens,

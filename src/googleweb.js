@@ -111,12 +111,13 @@ function extractTexts(line) {
 }
 
 export class GoogleWebSession {
-  constructor({ email, masterToken, androidId, app = DEFAULT_WEB_APP, clientSig = DEFAULT_WEB_SIG }) {
+  constructor({ email, masterToken, androidId, app = DEFAULT_WEB_APP, clientSig = DEFAULT_WEB_SIG, cookie = "" }) {
     this.email = email;
     this.masterToken = masterToken;
     this.androidId = androidId;
     this.app = app;
     this.clientSig = clientSig;
+    this.cookieString = String(cookie || "").trim();
     this.cookies = null;
     this.tokens = null;
     this.cookiesAt = 0;
@@ -149,6 +150,18 @@ export class GoogleWebSession {
 
   async ensureCookies({ force = false } = {}) {
     if (!force && this.cookies && Date.now() - this.cookiesAt < 6 * 60 * 60 * 1000) return this.cookies;
+    if (this.cookieString) {
+      const cookies = this.cookieString
+        .split(";")
+        .map((part) => part.trim())
+        .filter(Boolean);
+      if (!cookies.some((c) => c.startsWith("SID=") || c.startsWith("__Secure-1PSID="))) {
+        throw new WebError("cookie string has no SID / __Secure-1PSID", { code: "bad_cookie" });
+      }
+      this.cookies = cookies;
+      this.cookiesAt = Date.now();
+      return cookies;
+    }
     return this.#mintCookies();
   }
 

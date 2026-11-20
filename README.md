@@ -38,6 +38,18 @@ ADMIN_PASSWORD=your-password npm start
 
 首次启动会打印一个自动生成的 `sk-robin-…` API Key 和 admin 密码（若未设置 `ADMIN_PASSWORD`）。登录后可在「设置 → 管理员密码」里改成你自己的密码（8–128 位）；若密码由环境变量 `ADMIN_PASSWORD` 提供，面板会禁改并提示到部署平台修改。数据在 `DATA_DIR`（默认 `./data`）。
 
+## 凭证组
+
+凭证池按通道分成三个组，面板「凭证」页也按组展示：
+
+| 组 | 凭证来源 | 上游 | 可用模型 |
+| --- | --- | --- | --- |
+| **robin 组** | `oauth_token` → master token → mint Cookie | Gemini 网页版 | `web-*` |
+| **pggo 组** | 直接粘贴浏览器 Cookie | Gemini 网页版 | `web-*` |
+| **AGY 组** | Antigravity / Code Assist OAuth | Code Assist（`cloudcode-pa`） | `gemini-*` / `claude-*` / `gpt-oss-*` |
+
+`/v1/models` 和面板「模型」页里的每个模型都带 `groups` 字段（`agy` 或 `robin / pggo`），一眼能看出该用哪个组的凭证。
+
 ## 导入凭证
 
 ### 方式一：robin（推荐，长期有效）
@@ -50,7 +62,13 @@ ADMIN_PASSWORD=your-password npm start
 
 > `oauth_token` 换出 master token 后即失效，但 **master token 等价于该 Google 账号的长期授权**（撤销方式只有改密码/踢设备）。请只把自己的凭证导入自己部署的实例。
 
-### 方式二：OAuth 授权码（Antigravity 客户端流程）
+### 方式二：pggo（Cookie 直连，最快）
+
+在已登录 Gemini 的浏览器里导出 `gemini.google.com` 的完整 Cookie（F12 → Application → Cookies，或从任意请求的 Cookie 头复制），粘贴到面板「导入 pggo 凭证」卡片。服务端会先访问一次 `gemini.google.com/app`，能拿到 `at`/`bl` 才保存。
+
+适合快速试用或没有 master token 的场景；**Cookie 会过期（通常几天到几周），过期后需要重新导入**。如果同一账号已有 robin 凭证，两个组可以同时存在、自动轮换。
+
+### 方式三：OAuth 授权码（Antigravity 客户端流程）
 
 这条路径需要 Antigravity 桌面客户端的公开 OAuth client（`ANTIGRAVITY_CLIENT_ID` / `ANTIGRAVITY_CLIENT_SECRET`），在部署环境里配置，**不要提交到 git**；只用 robin 导入的话可以不配。
 
