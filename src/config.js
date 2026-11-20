@@ -81,7 +81,7 @@ export const config = {
     mintTimeoutMs: int(process.env.WAA_MINT_TIMEOUT_MS, 120_000),
     // AI Studio accounts carry a benefit tier; Pro/Ultra get a different
     // X-AIStudio-G1-Tier header. Free accounts need no header.
-    defaultTier: (process.env.AI_STUDIO_TIER || "").trim(),
+    defaultTier: (process.env.AI_STUDIO_TIER || "TIER1").trim(),
   },
 
   // Optional Cloudflare KV backing store: keeps credentials across restarts

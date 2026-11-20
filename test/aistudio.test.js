@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { FrameStream, buildGenerateWire, isPggoModel, listPggoModels, parseFrame } from "../src/aistudio.js";
 
-const model = { id: "pggo-gemini-2.5-flash", upstream: "models/gemini-2.5-flash", name: "flash" };
+const model = { id: "pggo-gemini-4-neon", upstream: "models/gemini-4-neon", name: "flash" };
 
 test("lists pggo models with upstream ids", () => {
   const models = listPggoModels();
@@ -11,7 +11,7 @@ test("lists pggo models with upstream ids", () => {
     assert.match(item.id, /^pggo-/);
     assert.match(item.upstream, /^models\//);
   }
-  assert.equal(isPggoModel("pggo-gemini-2.5-flash"), true);
+  assert.equal(isPggoModel("pggo-gemini-4-neon"), true);
   assert.equal(isPggoModel("web-gemini-4-hydrogen"), false);
 });
 
@@ -27,7 +27,7 @@ test("builds the AI Studio wire", () => {
     top_p: 0.9,
     top_k: 40,
   });
-  assert.equal(wire[0], "models/gemini-2.5-flash");
+  assert.equal(wire[0], "models/gemini-4-neon");
   assert.deepEqual(wire[1], [
     [[[null, "hi"]], "user"],
     [[[null, "hello"]], "model"],
@@ -42,7 +42,7 @@ test("parses a candidate frame with usage", () => {
   const parts = [
     [null, "Hel"],
     [null, "lo"],
-    [null, "thinking", null, null, null, null, null, null, null, null, null, null, 1],
+    [null, "thinking", null, null, null, null, null, null, null, null, 1],
   ];
   const frame = [[[[parts, "model"], 1]], null, [7, 3, 10, 0, null, null, null, 0, null, 2]];
   const parsed = parseFrame(frame);

@@ -33,10 +33,18 @@ export const EXT_BIN_HEADER = "CAASAUIwATgEQABQBFgDYgJKUHAAeAGQAQCYAQE=";
  * `AI_STUDIO_MODELS` (comma separated upstream ids) when it does.
  */
 export const AI_STUDIO_MODELS = [
-  { id: "pggo-gemini-3.7-flash", upstream: "models/gemini-3.7-flash", name: "Gemini 3.7 Flash (AI Studio)" },
-  { id: "pggo-gemini-3-pro", upstream: "models/gemini-3-pro-preview", name: "Gemini 3 Pro (AI Studio)" },
-  { id: "pggo-gemini-2.5-pro", upstream: "models/gemini-2.5-pro", name: "Gemini 2.5 Pro (AI Studio)" },
-  { id: "pggo-gemini-2.5-flash", upstream: "models/gemini-2.5-flash", name: "Gemini 2.5 Flash (AI Studio)" },
+  { id: "pggo-gemini-4-neon", upstream: "models/gemini-4-neon", name: "Gemini 4 Neon (AI Studio)" },
+  { id: "pggo-gemini-4-hydrogen", upstream: "models/gemini-4-hydrogen", name: "Gemini 4 Hydrogen (AI Studio)" },
+  { id: "pggo-gemini-4-carbon", upstream: "models/gemini-4-carbon", name: "Gemini 4 Carbon (AI Studio)" },
+  { id: "pggo-gemini-4-argon", upstream: "models/gemini-4-argon", name: "Gemini 4 Argon (AI Studio)" },
+  { id: "pggo-gemini-3.8-flash", upstream: "models/gemini-3.8-flash", name: "Gemini 3.8 Flash (AI Studio)" },
+  { id: "pggo-gemini-3.6-flash", upstream: "models/gemini-3.6-flash", name: "Gemini 3.6 Flash (AI Studio)" },
+  { id: "pggo-gemini-3.1-pro-preview", upstream: "models/gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview (AI Studio)" },
+  { id: "pggo-gemini-3-flash-preview", upstream: "models/gemini-3-flash-preview", name: "Gemini 3 Flash Preview (AI Studio)" },
+  { id: "pggo-gemini-3.5-flash-lite", upstream: "models/gemini-3.5-flash-lite", name: "Gemini 3.5 Flash Lite (AI Studio)" },
+  { id: "pggo-gemini-3.1-flash-lite", upstream: "models/gemini-3.1-flash-lite", name: "Gemini 3.1 Flash Lite (AI Studio)" },
+  { id: "pggo-gemini-pro-latest", upstream: "models/gemini-pro-latest", name: "Gemini Pro Latest (AI Studio)" },
+  { id: "pggo-gemini-flash-latest", upstream: "models/gemini-flash-latest", name: "Gemini Flash Latest (AI Studio)" },
 ];
 
 export function listPggoModels() {
@@ -123,14 +131,19 @@ export function minimalCookies(cookies) {
  * Returns `{cookies, header, ok, missing}`.
  */
 export function prepareCookies(raw) {
+  const all = parseCookieHeader(raw);
   const cookies = minimalCookies(raw);
   const missing = [];
   if (!cookies.SID && !cookies["__Secure-1PSID"]) missing.push("SID");
   if (!cookies.SAPISID && !cookies["__Secure-1PAPISID"] && !cookies["__Secure-3PAPISID"]) missing.push("SAPISID");
-  const header = Object.entries(cookies)
-    .map(([name, value]) => `${name}=${value}`)
-    .join("; ");
-  return { cookies, header, ok: missing.length === 0, missing };
+  // The signer replays the whole browser session (it loads aistudio.google.com
+  // itself), so it needs every cookie the browser had - NID/PSIDTS included.
+  // The RPC only needs the minimal set; both strings are returned.
+  const encode = (dict) =>
+    Object.entries(dict)
+      .map(([name, value]) => `${name}=${value}`)
+      .join("; ");
+  return { cookies, header: encode(all), minimalHeader: encode(cookies), ok: missing.length === 0, missing };
 }
 
 /**
@@ -253,7 +266,7 @@ export function parseFrame(frame) {
     const thoughts = [];
     for (const part of parts) {
       if (!Array.isArray(part) || typeof part[1] !== "string") continue;
-      if (part[12] === 1 || part[12] === true) thoughts.push(part[1]);
+      if (part[10] === 1 || part[10] === true) thoughts.push(part[1]);
       else texts.push(part[1]);
     }
     out.text = texts.join("");

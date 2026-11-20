@@ -72,6 +72,8 @@ pggo 走 Google AI Studio 的 MakerSuite 私有 RPC（`alkalimakersuite-pa.clien
 
 请求路径：网关用 Cookie 让签名器还原 AI Studio 会话 → 签名器按请求文本生成 `!proof` 并返回配套请求头 → 网关注入 `wire[4]` 调 `GenerateContent` → 解码流式帧转成 OpenAI SSE。
 
+> 账号档位：`AI_STUDIO_TIER` 默认 `TIER1`（Google AI Pro）。免费账号或档位不符时上游会返回 `403 caller does not have permission`，此时设为 `AI_STUDIO_TIER=none` 或对应的 `TIER0`/`TIER2`。
+>
 > 说明：签名器随项目 `Dockerfile` 多阶段构建（Go + SpiderMonkey 静态库），本地开发需先跑 `waa-signer/build.sh`，或用 `WAA_SIGNER_PATH` 指向已有的二进制。`WAA_DISABLED=1` 可以整体关闭 pggo 通道。AI Studio 的私有协议会随 Google 更新，模型列表可用 `AI_STUDIO_MODELS` 覆盖。
 
 ### 方式三：OAuth 授权码（Antigravity 客户端流程）

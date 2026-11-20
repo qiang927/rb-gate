@@ -255,7 +255,7 @@ export async function testCredential(id) {
     try {
       const result = await completePggoChat({
         cookie,
-        model: { id: "pggo-gemini-3.7-flash", upstream: "models/gemini-3.7-flash" },
+        model: { id: "pggo-gemini-4-neon", upstream: "models/gemini-4-neon" },
         body: { messages: [{ role: "user", content: "Reply with the single word OK." }], max_tokens: 32 },
         tier: cred.tier || undefined,
       });
