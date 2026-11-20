@@ -15,6 +15,11 @@ ENV WAA_SIGNER_PATH=/app/waa-signer/bin/waa-signer
 
 WORKDIR /app
 
+# node:*-slim has no CA bundle; the signer's TLS stack needs the system roots.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
