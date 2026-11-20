@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Robin Gateway - AI Studio Executor
 // @namespace    robin-gateway
-// @version      0.2.0
+// @version      0.2.1
 // @description  把已登录的 AI Studio 页面接入 robin-gateway，为 pggo-* 模型提供 WAA 证明与真实会话
 // @match        https://aistudio.google.com/*
 // @run-at       document-start
@@ -82,6 +82,53 @@
         <button id="robin-exec-reconnect" style="background:#1e293b;border:1px solid #334155;color:#cbd5e1;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer">重连</button>
       </div>
     `;
+    // draggable: drag the title bar; position is remembered across reloads
+    const header = root.firstElementChild;
+    header.style.cursor = "move";
+    header.style.touchAction = "none";
+    header.style.userSelect = "none";
+    header.title = "拖动可移动面板";
+    try {
+      const saved = GM_getValue("panelPos", null);
+      if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+        root.style.left = `${saved.x}px`;
+        root.style.top = `${saved.y}px`;
+        root.style.right = "auto";
+        root.style.bottom = "auto";
+      }
+    } catch {}
+    let drag = null;
+    header.addEventListener("pointerdown", (event) => {
+      if (event.target.closest("button")) return;
+      const rect = root.getBoundingClientRect();
+      drag = { dx: event.clientX - rect.left, dy: event.clientY - rect.top };
+      header.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+    header.addEventListener("pointermove", (event) => {
+      if (!drag) return;
+      const x = Math.min(Math.max(0, event.clientX - drag.dx), window.innerWidth - root.offsetWidth);
+      const y = Math.min(Math.max(0, event.clientY - drag.dy), window.innerHeight - root.offsetHeight);
+      root.style.left = `${x}px`;
+      root.style.top = `${y}px`;
+      root.style.right = "auto";
+      root.style.bottom = "auto";
+    });
+    const endDrag = () => {
+      if (!drag) return;
+      drag = null;
+      try { GM_setValue("panelPos", { x: parseInt(root.style.left, 10) || 0, y: parseInt(root.style.top, 10) || 0 }); } catch {}
+    };
+    header.addEventListener("pointerup", endDrag);
+    header.addEventListener("pointercancel", endDrag);
+    window.addEventListener("resize", () => {
+      if (!root.style.left) return;
+      const x = Math.min(parseInt(root.style.left, 10) || 0, window.innerWidth - root.offsetWidth);
+      const y = Math.min(parseInt(root.style.top, 10) || 0, window.innerHeight - root.offsetHeight);
+      root.style.left = `${Math.max(0, x)}px`;
+      root.style.top = `${Math.max(0, y)}px`;
+    });
+
     document.body.appendChild(root);
     panel.root = root;
     panel.body = root.querySelector("#robin-exec-body");
