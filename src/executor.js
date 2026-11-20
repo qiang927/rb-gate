@@ -33,6 +33,10 @@ export function executorStatus() {
       connectedAt: client.connectedAt,
       lastSeenAt: client.lastSeenAt,
       busy: Boolean(client.job),
+      waa: Boolean(client.waa),
+      hasApiKey: Boolean(client.hasApiKey),
+      jobs: client.jobs || 0,
+      lastError: client.lastError || "",
     })),
   };
 }
@@ -109,6 +113,10 @@ function register(ws, req) {
     connectedAt: new Date().toISOString(),
     lastSeenAt: Date.now(),
     job: null,
+    waa: false,
+    hasApiKey: false,
+    jobs: 0,
+    lastError: "",
   };
   clients.add(client);
   logInfo(`executor: connected ${client.label} (${clients.size} total)`);
@@ -155,6 +163,13 @@ function handleMessage(client, message) {
     return;
   }
   if (type === "pong") return;
+  if (type === "status") {
+    client.waa = Boolean(message.waa);
+    client.hasApiKey = Boolean(message.hasApiKey);
+    if (typeof message.jobs === "number") client.jobs = message.jobs;
+    if (typeof message.lastError === "string") client.lastError = message.lastError.slice(0, 300);
+    return;
+  }
   if (type === "chunk") {
     const job = client.job;
     if (!job || job.id !== message.id) return;
@@ -165,6 +180,8 @@ function handleMessage(client, message) {
     const job = client.job;
     if (!job || job.id !== message.id) return;
     client.job = null;
+    client.jobs = (client.jobs || 0) + 1;
+    client.lastError = "";
     job.finish();
     return;
   }
@@ -172,7 +189,8 @@ function handleMessage(client, message) {
     const job = client.job;
     if (!job || job.id !== message.id) return;
     client.job = null;
-    job.fail(new Error(String(message.message || message.error || "executor error")));
+    client.lastError = String(message.message || message.error || "executor error").slice(0, 300);
+    job.fail(new Error(client.lastError));
   }
 }
 

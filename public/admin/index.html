@@ -504,11 +504,31 @@
       const data = await api("/admin/api/executor");
       $("executorToken").textContent = data.token;
       const clients = data.clients || [];
-      box.textContent = clients.length
-        ? clients
-            .map((client) => `· ${client.label}  ${client.busy ? "忙碌" : "空闲"}  连接于 ${new Date(client.connectedAt).toLocaleString()}`)
-            .join("\n")
-        : "尚未连接：安装脚本并打开 aistudio.google.com 后会自动连上。";
+      if (!clients.length) {
+        box.textContent = [
+          "状态：没有执行器在线",
+          "",
+          "怎么连：",
+          "1) 浏览器安装 Tampermonkey，打开本实例 /pggo-executor.user.js 安装",
+          "2) 打开 https://aistudio.google.com/ 并登录，正常发一条消息",
+          "3) 页面右下角会出现「robin 执行器」面板，点「设置网关/Token」填地址与上面的 Token",
+          "连上后这里会显示该标签页、WAA 是否就绪、API Key 是否捕获。",
+        ].join("\n");
+        return;
+      }
+      box.textContent = clients
+        .map((client) => {
+          const flags = [
+            client.busy ? "忙碌" : "空闲",
+            client.waa ? "WAA 就绪" : "WAA 等待",
+            client.hasApiKey ? "API Key 已捕获" : "API Key 用内置",
+            `任务 ${client.jobs || 0}`,
+            `连接于 ${new Date(client.connectedAt).toLocaleString()}`,
+          ];
+          const err = client.lastError ? `  最近错误：${client.lastError}` : "";
+          return `· ${client.label}  | ${flags.join(" | ")}${err}`;
+        })
+        .join("\n");
     } catch (error) {
       box.textContent = `加载失败：${error.message}`;
     }
@@ -803,6 +823,13 @@
   $("gotoExecutor").addEventListener("click", () => {
     document.querySelector('[data-tab="executor"]')?.click();
   });
+
+  $("copyExecutorToken").addEventListener("click", () => copyText($("executorToken").textContent || ""));
+  $("executorRefresh").addEventListener("click", () => loadExecutor());
+
+  setInterval(() => {
+    if (!$("tab-executor").classList.contains("hidden")) loadExecutor();
+  }, 5000);
 
   $("refreshCreds").addEventListener("click", () => loadOverview().then(() => toast("已刷新")).catch((e) => toast(e.message, true)));
 
