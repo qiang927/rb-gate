@@ -5,6 +5,8 @@ import { config, ensureConfigWarnings } from "./config.js";
 import { importMaster, importPggo, provisionOAuth, provisionRobin, testCredential } from "./credentials.js";
 import { buildAuthUrl, createPkcePair, UpstreamError } from "./google.js";
 import { GoogleWebSession, WEB_MODELS, isWebModel } from "./googleweb.js";
+import { buildGenerateWire, isPggoModel, listPggoModels, lookupPggoModel } from "./aistudio.js";
+import { attachExecutor, executorStatus, executorToken, hasExecutor, runExecutorJob } from "./executor.js";
 import { decryptString } from "./crypto.js";
 import { listModels, resolveModelId } from "./models.js";
 import { openStream, withCredential } from "./router.js";
@@ -154,7 +156,15 @@ app.get("/v1/models", (req, res) => {
         object: "model",
         created: 1735689600,
         owned_by: "google-web",
-        groups: ["robin", "pggo"],
+        groups: ["robin"],
+      })),
+      ...listPggoModels().map((model) => ({
+        id: model.id,
+        object: "model",
+        created: 1735689600,
+        owned_by: "google-aistudio",
+        groups: ["pggo"],
+        name: model.name,
       })),
     ],
   });
@@ -166,7 +176,11 @@ app.get("/v1/models/:id", (req, res) => {
     return res.json({ id: model.id, object: "model", created: 1735689600, owned_by: model.ownedBy || "google" });
   }
   if (isWebModel(req.params.id)) {
-    return res.json({ id: req.params.id, object: "model", created: 1735689600, owned_by: "google-web", groups: ["robin", "pggo"] });
+    return res.json({ id: req.params.id, object: "model", created: 1735689600, owned_by: "google-web", groups: ["robin"] });
+  }
+  const pggo = lookupPggoModel(req.params.id);
+  if (pggo) {
+    return res.json({ id: pggo.id, object: "model", created: 1735689600, owned_by: "google-aistudio", groups: ["pggo"], name: pggo.name });
   }
   return sendOpenaiError(res, 404, `model ${req.params.id} not found`, { code: "model_not_found" });
 });
@@ -177,6 +191,9 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
     return sendOpenaiError(res, 400, "messages must be a non-empty array", { code: "invalid_messages" });
   }
   const stream = Boolean(body.stream);
+  if (isPggoModel(body.model)) {
+    return handlePggoChat(req, res, body, body.model, stream);
+  }
   if (isWebModel(body.model)) {
     return handleWebChat(req, res, body, body.model, stream);
   }
@@ -396,6 +413,98 @@ async function handleWebChat(req, res, body, model, stream) {
   }
 }
 
+async function handlePggoChat(req, res, body, modelId, stream) {
+  const model = lookupPggoModel(modelId);
+  if (!model) {
+    return sendOpenaiError(res, 404, `model ${modelId} not found`, { code: "model_not_found" });
+  }
+  let wire;
+  let binding;
+  try {
+    ({ wire, binding } = buildGenerateWire(model, body));
+  } catch (error) {
+    return sendOpenaiError(res, 400, `could not build the AI Studio request: ${error.message}`, { code: "bad_request" });
+  }
+  if (!hasExecutor()) {
+    return sendOpenaiError(res, 503, "no browser executor connected: open the executor script on aistudio.google.com (admin -> 执行器)", { code: "no_pggo_executor" });
+  }
+  const controller = new AbortController();
+  res.on("close", () => controller.abort(new Error("client closed the connection")));
+
+  if (!stream) {
+    try {
+      const result = await runExecutorJob({ wire, binding }, { signal: controller.signal });
+      const text = String(result.text || "").trim();
+      if (!text) throw new Error("AI Studio returned an empty response");
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      return res.json(
+        buildOpenaiResponse({ text, model: modelId, toolCalls: [], usage: openaiUsage(result.usage) }),
+      );
+    } catch (error) {
+      if (controller.signal.aborted) return res.end();
+      logError(`pggo chat failed: ${error.message}`);
+      return sendOpenaiError(res, error.status || 502, error.message, { type: "pggo_error", code: error.code || "pggo_failed" });
+    }
+  }
+
+  const id = `chatcmpl-${crypto.randomBytes(12).toString("hex")}`;
+  const created = Math.floor(Date.now() / 1000);
+  res.writeHead(200, openaiSseHeaders());
+  const send = (chunk) => res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+  let wroteRole = false;
+  let usage = null;
+  try {
+    const result = await runExecutorJob(
+      { wire, binding },
+      {
+        signal: controller.signal,
+        onEvent: (event) => {
+          if (controller.signal.aborted) return;
+          if (event.type !== "text" || !event.text) return;
+          if (!wroteRole) {
+            send(buildOpenaiChunk({ id, model: modelId, created, delta: { role: "assistant" } }));
+            wroteRole = true;
+          }
+          send(buildOpenaiChunk({ id, model: modelId, created, delta: { content: event.text } }));
+        },
+      },
+    );
+    usage = result.usage;
+    send(buildOpenaiChunk({ id, model: modelId, created, delta: {}, finishReason: "stop" }));
+    if (body.stream_options?.include_usage) {
+      send(
+        buildOpenaiChunk({
+          id,
+          model: modelId,
+          created,
+          delta: {},
+          finishReason: null,
+          usage: openaiUsage(usage),
+        }),
+      );
+    }
+    res.write("data: [DONE]\n\n");
+    res.end();
+  } catch (error) {
+    logError(`[pggo stream] ${error.message}`);
+    if (!res.headersSent) {
+      return sendOpenaiError(res, error.status || 502, error.message, { type: "pggo_error", code: error.code || "pggo_failed" });
+    }
+    res.write(`data: ${JSON.stringify({ error: { message: error.message, type: "pggo_error" } })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }
+}
+
+function openaiUsage(usage) {
+  if (!usage) return { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  return {
+    prompt_tokens: usage.promptTokens || 0,
+    completion_tokens: usage.completionTokens || 0,
+    total_tokens: usage.totalTokens || 0,
+  };
+}
+
 function mapFinish(reason) {
   switch (reason) {
     case "MAX_TOKENS":
@@ -460,6 +569,10 @@ app.post("/admin/api/password", requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/admin/api/executor", requireAdmin, (req, res) => {
+  res.json({ ok: true, token: executorToken(), ...executorStatus() });
+});
+
 app.get("/admin/api/logs", requireAdmin, (req, res) => {
   res.json({ logs: recentLogs(Number(req.query.limit) || 200) });
 });
@@ -478,7 +591,8 @@ app.get("/admin/api/overview", requireAdmin, (req, res) => {
     stats,
     models: [
       ...listModels(),
-      ...Object.entries(WEB_MODELS).map(([id, cfg]) => ({ id, display_name: cfg.label, ownedBy: "google-web", groups: ["robin", "pggo"] })),
+      ...Object.entries(WEB_MODELS).map(([id, cfg]) => ({ id, display_name: cfg.label, ownedBy: "google-web", groups: ["robin"] })),
+      ...listPggoModels().map((model) => ({ id: model.id, display_name: model.name, ownedBy: "google-aistudio", groups: ["pggo"] })),
     ],
     apiKeys: store.listApiKeys(),
     admin: { source: store.adminSource() },
@@ -489,6 +603,7 @@ app.get("/admin/api/overview", requireAdmin, (req, res) => {
       cooldownMs: config.cooldownMs,
       robinApp: config.robinApp,
       robinScopes: config.robinScopes,
+      executorConnected: executorStatus().connected,
     },
     initialPassword: store.admin().generated ? store.admin().plaintextOnce || "" : "",
   });
@@ -697,8 +812,18 @@ const server = app.listen(config.port, config.host, () => {
   for (const warning of ensureConfigWarnings()) logWarn(`config: ${warning}`);
 });
 
+let executorHub = null;
+if (!process.env.ROBIN_GATEWAY_NO_EXECUTOR) {
+  executorHub = attachExecutor(server);
+}
+
 function shutdown(signal) {
   console.log(`${signal} received, shutting down`);
+  try {
+    executorHub?.close();
+  } catch {
+    /* ignore */
+  }
   server.close(() => {
     void store.flush().finally(() => process.exit(0));
   });
