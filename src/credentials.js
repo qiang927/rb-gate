@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 import { config } from "./config.js";
 import { decryptString, encryptString } from "./crypto.js";
 import { exchangeToken, mintBearer } from "./gpsoauth.js";
-import { GoogleWebSession } from "./googleweb.js";
+import { prepareCookies } from "./aistudio.js";
+import { completePggoChat } from "./pggo.js";
 import {
   UpstreamError,
   ensureProject,
@@ -250,15 +251,25 @@ export async function testCredential(id) {
   if (!cred) throw fail("credential not found");
   if (cred.type === "pggo") {
     if (!cred.cookieEnc) throw fail("pggo credential has no cookie; re-import it");
+    const cookie = decryptString(cred.cookieEnc, config.dataDir);
     try {
-      const session = new GoogleWebSession({ email: cred.email, cookie: decryptString(cred.cookieEnc, config.dataDir) });
-      await session.bootstrap({ force: true });
+      const result = await completePggoChat({
+        cookie,
+        model: { id: "pggo-gemini-3.7-flash", upstream: "models/gemini-3.7-flash" },
+        body: { messages: [{ role: "user", content: "Reply with the single word OK." }], max_tokens: 32 },
+        tier: cred.tier || undefined,
+      });
+      store.markOk(id);
+      return {
+        ok: true,
+        channel: "pggo",
+        reply: String(result.text || "").trim().slice(0, 80),
+        credential: store.getCredential(id),
+      };
     } catch (error) {
       store.markError(id, error.message);
       throw error;
     }
-    store.markOk(id);
-    return { ok: true, channel: "pggo", credential: store.getCredential(id) };
   }
   const forced = { ...cred, accessToken: "", accessExpiresAt: 0 };
   let token;
@@ -311,33 +322,27 @@ export function normalizeCookie(raw) {
 }
 
 /**
- * pggo channel: accept a full Google cookie jar copied from a logged-in
- * browser and verify it against gemini.google.com/app.
+ * pggo channel: an AI Studio browser session. The cookie is the credential;
+ * the server-side WAA signer turns it into BotGuard-proofed MakerSuite calls.
  */
-export async function importPggo({ cookie, email = "", label = "" }) {
+export async function importPggo({ cookie, email = "", label = "", tier = "" }) {
   const normalized = normalizeCookie(cookie);
-  if (!normalized) throw fail("Cookie 为空：请粘贴登录后的完整 Cookie（至少含 SID 或 __Secure-1PSID）");
-  if (!/(^|;\s*)(SID|__Secure-1PSID)=/.test(normalized)) {
-    throw fail("Cookie 里没有 SID / __Secure-1PSID：可能复制不完整，或复制的是未登录状态");
-  }
-  const session = new GoogleWebSession({ email, cookie: normalized });
-  try {
-    await session.bootstrap();
-  } catch (error) {
-    const hint = /missing at\/bl|page failed/i.test(error.message)
-      ? "Cookie 无效或已过期：gemini.google.com 没有返回登录态。请确认复制的是登录后 gemini.google.com 的完整 Cookie（SID / __Secure-1PSID 等），最好用无痕窗口重新登录后再复制。"
-      : `Cookie 验证失败：${error.message}`;
-    throw fail(hint, error);
+  if (!normalized) throw fail("Cookie 为空：请粘贴 aistudio.google.com 登录后的完整 Cookie");
+  const prepared = prepareCookies(normalized);
+  if (!prepared.ok) {
+    throw fail(
+      `Cookie 缺少 AI Studio 登录态字段（${prepared.missing.join(", ")}）：请确认从已登录的 aistudio.google.com 复制完整 Cookie（含 SID 与 SAPISID 系列）。`,
+    );
   }
   const credential = store.upsertCredential({
     type: "pggo",
     group: "pggo",
     email,
     label,
-    cookie: normalized,
+    cookie: prepared.header,
     status: "active",
-    projectId: "",
-    tier: "",
+    projectId: "aistudio",
+    tier: tier || "",
   });
   return { ok: true, channel: "pggo", credential, verifiedAt: new Date().toISOString() };
 }

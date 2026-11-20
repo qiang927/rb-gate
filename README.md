@@ -45,10 +45,10 @@ ADMIN_PASSWORD=your-password npm start
 | 组 | 凭证来源 | 上游 | 可用模型 |
 | --- | --- | --- | --- |
 | **robin 组** | `oauth_token` → master token → mint Cookie | Gemini 网页版 | `web-*` |
-| **pggo 组** | 无需凭证：浏览器执行器（已登录的 AI Studio 页面） | AI Studio MakerSuite RPC | `pggo-*` |
+| **pggo 组** | 邮箱 + AI Studio Cookie（服务端 WAA 签名器） | AI Studio MakerSuite RPC | `pggo-*` |
 | **AGY 组** | Antigravity / Code Assist OAuth | Code Assist（`cloudcode-pa`） | `gemini-*` / `claude-*` / `gpt-oss-*` |
 
-`/v1/models` 和面板「模型」页里的每个模型都带 `groups` 字段（`agy` / `robin` / `pggo`），一眼能看出该用哪个组。pggo 组不保存凭证：它依赖一个在线浏览器执行器，见下文。
+`/v1/models` 和面板「模型」页里的每个模型都带 `groups` 字段（`agy` / `robin` / `pggo`），一眼能看出该用哪个组。
 
 ## 导入凭证
 
@@ -62,19 +62,17 @@ ADMIN_PASSWORD=your-password npm start
 
 > `oauth_token` 换出 master token 后即失效，但 **master token 等价于该 Google 账号的长期授权**（撤销方式只有改密码/踢设备）。请只把自己的凭证导入自己部署的实例。
 
-### 方式二：pggo（AI Studio 浏览器执行器）
+### 方式二：pggo（AI Studio Cookie，服务端 WAA 签名）
 
-pggo 走 Google AI Studio 的 MakerSuite 私有 RPC，请求里带 Web Attestation（WAA / BotGuard）证明，证明由页面自己的 `default_MakerSuite` 快照函数生成。所以网关不需要也不保存 Cookie，只需要一个“执行器”页面：
+pggo 走 Google AI Studio 的 MakerSuite 私有 RPC（`alkalimakersuite-pa.clients6.google.com`）。这个 RPC 要求请求里带 Web Attestation（WAA / BotGuard）证明，证明必须由真实浏览器环境生成。本项目把这一步交给容器里的原生签名器 `waa-signer`（Go + SpiderMonkey 152 + Firefox 152 指纹，参考 [DeconstructedCube/aistudio-api](https://github.com/DeconstructedCube/aistudio-api)）：
 
-1. 浏览器装 Tampermonkey（或同类用户脚本管理器）。
-2. 安装脚本：本实例的 `/pggo-executor.user.js`（直接点开安装）。
-3. 打开 [aistudio.google.com](https://aistudio.google.com/) 并登录要用的账号，正常发一条消息（让页面的 WAA service 初始化）。
-4. 面板「执行器」页复制 Token；油猴菜单 →「设置网关地址 / Token」，填本实例地址（如 `https://xxx.onrender.com`）与 Token。
-5. 连接成功后，「执行器」页会显示该浏览器标签页；此时调用 `pggo-*` 模型即可。
+1. 在浏览器登录 [aistudio.google.com](https://aistudio.google.com/)，F12 → Console 执行 `document.cookie`，或 Application → Cookies 复制整段 Cookie（至少含 `SID`、`__Secure-1PSID`、`SAPISID` / `__Secure-1PAPISID`）。
+2. 打开面板「凭证」页 →「导入 pggo 凭证（AI Studio）」，填邮箱（可选）与 Cookie，点「导入」。
+3. 调 `pggo-*` 模型即可。签名器在第一次请求时启动（冷启 5–8 秒），之后热调用 10–30ms。
 
-请求路径：网关把 `wire` + binding 推给执行器 → 页面注入 proof、发 `GenerateContent`、按块回传 → 网关解码帧并转成 OpenAI SSE。执行器离线时返回 `503 no_pggo_executor`。
+请求路径：网关用 Cookie 让签名器还原 AI Studio 会话 → 签名器按请求文本生成 `!proof` 并返回配套请求头 → 网关注入 `wire[4]` 调 `GenerateContent` → 解码流式帧转成 OpenAI SSE。
 
-> 说明：WAA 证明与页面会话绑定，所以执行器必须保持打开（可以放后台标签页）。这是 catiecli 的 pg- 通道同款做法，用它就不需要无头浏览器或上传 Cookie。
+> 说明：签名器随项目 `Dockerfile` 多阶段构建（Go + SpiderMonkey 静态库），本地开发需先跑 `waa-signer/build.sh`，或用 `WAA_SIGNER_PATH` 指向已有的二进制。`WAA_DISABLED=1` 可以整体关闭 pggo 通道。AI Studio 的私有协议会随 Google 更新，模型列表可用 `AI_STUDIO_MODELS` 覆盖。
 
 ### 方式三：OAuth 授权码（Antigravity 客户端流程）
 

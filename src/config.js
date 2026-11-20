@@ -70,6 +70,20 @@ export const config = {
     "antigravity/hub/2.33.0 (aidev_client; os_type=darwin; arch=arm64; cl=1023160026)",
   logRequests: bool(process.env.LOG_REQUESTS, false),
 
+  // Native WAA signer (Go + SpiderMonkey 152) used by the pggo channel.
+  // Boxed with the container image; the gateway spawns it lazily on first use.
+  waa: {
+    enabled: process.env.WAA_DISABLED !== "1",
+    signerPath: process.env.WAA_SIGNER_PATH || path.join(ROOT_DIR, "waa-signer", "bin", "waa-signer"),
+    stateDir: process.env.WAA_STATE_DIR || path.join(path.resolve(process.env.DATA_DIR || path.join(ROOT_DIR, "data")), "waa"),
+    proxy: (process.env.WAA_PROXY || "").trim(),
+    readyTimeoutMs: int(process.env.WAA_READY_TIMEOUT_MS, 30_000),
+    mintTimeoutMs: int(process.env.WAA_MINT_TIMEOUT_MS, 120_000),
+    // AI Studio accounts carry a benefit tier; Pro/Ultra get a different
+    // X-AIStudio-G1-Tier header. Free accounts need no header.
+    defaultTier: (process.env.AI_STUDIO_TIER || "").trim(),
+  },
+
   // Optional Cloudflare KV backing store: keeps credentials across restarts
   // when the host has no persistent disk (Render free tier and friends).
   kv: {

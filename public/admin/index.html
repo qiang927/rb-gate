@@ -253,28 +253,36 @@
           </details>
         </div>
 
-        <div class="card" id="executorCard">
-        <div class="row" style="justify-content:space-between;margin-bottom:8px">
-          <strong>浏览器执行器</strong>
-          <span class="badge pggo">pggo 组</span>
+        <div class="card" id="pggoCard">
+          <div class="row" style="justify-content:space-between;margin-bottom:8px">
+            <strong>导入 pggo 凭证（AI Studio）</strong>
+            <span class="badge pggo">pggo 组</span>
+          </div>
+          <p class="hint">
+            从已登录的 <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer">aistudio.google.com</a>
+            复制 Cookie（F12 → Console 里执行 <code>document.cookie</code>，或 Application → Cookies）。
+            服务端内置 WAA 签名器（Go + SpiderMonkey）负责生成 BotGuard 证明并直接调用 AI Studio 的 MakerSuite RPC，
+            不需要保持标签页打开，也不会上传 Cookie 到第三方。
+          </p>
+          <div class="field"><label>Google 邮箱（可选）</label><input id="pggoEmail" type="email" placeholder="you@gmail.com" /></div>
+          <div class="field"><label>AI Studio Cookie</label><textarea id="pggoCookie" placeholder="SID=…; HSID=…; SSID=…; APISID=…; SAPISID=…; __Secure-1PSID=…" spellcheck="false"></textarea></div>
+          <div class="field"><label>备注（可选）</label><input id="pggoLabel" placeholder="个人号 / 小号" /></div>
+          <div class="row"><button id="importPggoBtn">导入</button></div>
+          <p class="hint" style="margin-top:8px">Cookie 等价登录态，只导入到自己的实例；失效后重新复制即可。</p>
         </div>
-        <p class="hint">
-          pggo 模型由 AI Studio 页面直接执行：脚本运行在你自己已登录的 <code>aistudio.google.com</code> 标签页里，
-          负责生成 WAA 证明、发请求，并把流式结果回传。网关不保存 Cookie，也不需要无头浏览器。
-        </p>
-        <ol class="hint" style="padding-left:18px;line-height:1.9">
-          <li>浏览器安装 Tampermonkey / 油猴。</li>
-          <li>安装脚本：<a href="/pggo-executor.user.js" target="_blank" rel="noreferrer">/pggo-executor.user.js</a></li>
-          <li>打开 <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer">aistudio.google.com</a> 并登录。</li>
-          <li>点油猴菜单「设置网关地址 / Token」，粘贴下面的地址和 Token。</li>
-        </ol>
-        <div class="field">
-          <label>执行器 Token</label>
-          <div class="copy"><code id="executorToken">…</code><button id="copyExecutorToken">复制</button></div>
+
+        <div class="card" id="waaCard">
+          <div class="row" style="justify-content:space-between;margin-bottom:8px">
+            <strong>WAA 签名器</strong>
+            <span class="badge" id="waaBadge">…</span>
+          </div>
+          <p class="hint">
+            pggo 通道依赖容器内的原生签名器：它把账号 Cookie 还原成 AI Studio 会话，为每次请求生成 BotGuard 证明。
+            签名器随 Docker 镜像一起构建；本地开发需要先跑 <code>waa-signer/build.sh</code>。
+          </p>
+          <pre class="log-box" id="waaStatus" style="height:120px">加载中…</pre>
         </div>
-        <div class="row" style="margin:10px 0"><button id="executorRefresh">刷新状态</button></div>
-        <pre class="log-box" id="executorStatus" style="height:120px">加载中…</pre>
-      </div>
+
         <div class="card">
           <div class="row" style="justify-content:space-between; margin-bottom:8px">
             <strong>OAuth 授权导入</strong>
@@ -476,40 +484,26 @@
     }
   }
 
-  async function loadExecutor() {
-    const box = $("executorStatus");
-    try {
-      const data = await api("/admin/api/executor");
-      $("executorToken").textContent = data.token;
-      const clients = data.clients || [];
-      if (!clients.length) {
-        box.textContent = [
-          "状态：没有执行器在线",
-          "",
-          "怎么连：",
-          "1) 浏览器安装 Tampermonkey，打开本实例 /pggo-executor.user.js 安装",
-          "2) 打开 https://aistudio.google.com/ 并登录，正常发一条消息",
-          "3) 页面右下角会出现「robin 执行器」面板，点「设置网关/Token」填地址与上面的 Token",
-          "连上后这里会显示该标签页、WAA 是否就绪、API Key 是否捕获。",
-        ].join("\n");
-        return;
-      }
-      box.textContent = clients
-        .map((client) => {
-          const flags = [
-            client.busy ? "忙碌" : "空闲",
-            client.waa ? "WAA 就绪" : "WAA 等待",
-            client.hasApiKey ? "API Key 已捕获" : "API Key 用内置",
-            `任务 ${client.jobs || 0}`,
-            `连接于 ${new Date(client.connectedAt).toLocaleString()}`,
-          ];
-          const err = client.lastError ? `  最近错误：${client.lastError}` : "";
-          return `· ${client.label}  | ${flags.join(" | ")}${err}`;
-        })
-        .join("\n");
-    } catch (error) {
-      box.textContent = `加载失败：${error.message}`;
+  function renderWaa(waa) {
+    const box = $("waaStatus");
+    const badge = $("waaBadge");
+    if (!box || !badge) return;
+    if (!waa) {
+      box.textContent = "签名器状态未知（刷新概览重试）";
+      badge.textContent = "未知";
+      badge.className = "badge";
+      return;
     }
+    const available = Boolean(waa.available);
+    badge.textContent = available ? "运行中" : waa.binaryExists ? "待启动" : "缺失";
+    badge.className = `badge ${available ? "robin" : "agy"}`;
+    box.textContent = [
+      `路径：${waa.binary || "?"}`,
+      `二进制：${waa.binaryExists ? "存在" : "不存在（本地需构建；Render 用 Docker 镜像自带）"}`,
+      `引擎：${waa.engine || "—"}`,
+      `状态：${available ? "已就绪" : waa.enabled ? "尚未启动（首次 pggo 请求时启动）" : "已禁用（WAA_DISABLED=1）"}`,
+      `最近错误：${waa.lastError || "无"}`,
+    ].join("\n");
   }
 
   function startLogPolling() {
@@ -526,11 +520,11 @@
     $("baseUrl").textContent = location.origin + "/v1";
     await loadOverview();
     startLogPolling();
-    loadExecutor();
   }
 
   async function loadOverview() {
     overview = await api("/admin/api/overview");
+    renderWaa(overview.settings?.waa);
     const stats = overview.stats || {};
     $("statCreds").textContent = stats.credentials ?? 0;
     $("statActive").textContent = `${stats.active ?? 0} / ${stats.error ?? 0}`;
@@ -551,7 +545,7 @@
 
   const CRED_GROUPS = [
     { id: "robin", title: "robin 组", note: "oauth_token → master token → mint → 网页版 Gemini。一次导入、长期自动续期。" },
-    { id: "pggo", title: "pggo 组", note: "AI Studio 通道：浏览器执行器在线时可用，不需要在网关保存 Cookie。" },
+    { id: "pggo", title: "pggo 组", note: "AI Studio 通道：保存 AI Studio Cookie，由服务端 WAA 签名器直接调用 MakerSuite RPC。" },
     { id: "agy", title: "AGY 组", note: "Antigravity / Code Assist OAuth，走 Code Assist 上游（高阶模型）。" },
   ];
 
@@ -798,12 +792,27 @@
     }
   });
 
-  $("copyExecutorToken")?.addEventListener("click", () => copyText($("executorToken").textContent || ""));
-  $("executorRefresh")?.addEventListener("click", () => loadExecutor());
-
-  setInterval(() => {
-    if ($("executorCard")) loadExecutor();
-  }, 5000);
+  $("importPggoBtn").addEventListener("click", async () => {
+    const btn = $("importPggoBtn");
+    btn.disabled = true;
+    try {
+      const result = await api("/admin/api/credentials/import-pggo", {
+        method: "POST",
+        body: JSON.stringify({
+          cookie: $("pggoCookie").value.trim(),
+          email: $("pggoEmail").value.trim(),
+          label: $("pggoLabel").value.trim(),
+        }),
+      });
+      $("pggoCookie").value = "";
+      toast(result.warning ? `导入成功，但：${result.warning}` : "pggo 凭证已导入");
+      await loadOverview();
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   $("refreshCreds").addEventListener("click", () => loadOverview().then(() => toast("已刷新")).catch((e) => toast(e.message, true)));
 
@@ -845,7 +854,6 @@
       if (section) section.classList.toggle("hidden", name !== btn.dataset.tab);
       });
       if (btn.dataset.tab === "logs") loadLogs();
-      if (btn.dataset.tab === "executor") loadExecutor();
     });
   });
 

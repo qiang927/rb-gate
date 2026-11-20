@@ -5,8 +5,9 @@ import { config, ensureConfigWarnings } from "./config.js";
 import { importMaster, importPggo, provisionOAuth, provisionRobin, testCredential } from "./credentials.js";
 import { buildAuthUrl, createPkcePair, UpstreamError } from "./google.js";
 import { GoogleWebSession, WEB_MODELS, isWebModel } from "./googleweb.js";
-import { buildGenerateWire, isPggoModel, listPggoModels, lookupPggoModel } from "./aistudio.js";
-import { attachExecutor, executorStatus, executorToken, hasExecutor, runExecutorJob } from "./executor.js";
+import { isPggoModel, listPggoModels, lookupPggoModel } from "./aistudio.js";
+import { completePggoChat, streamPggoChat } from "./pggo.js";
+import { waaSigner } from "./waa.js";
 import { decryptString } from "./crypto.js";
 import { listModels, resolveModelId } from "./models.js";
 import { openStream, withCredential } from "./router.js";
@@ -413,37 +414,70 @@ async function handleWebChat(req, res, body, model, stream) {
   }
 }
 
+function findPggoCredential() {
+  const candidates = store
+    .listCredentials()
+    .map((item) => store.rawCredential(item.id))
+    .filter((cred) => cred && cred.type === "pggo" && cred.cookieEnc && cred.status !== "disabled");
+  if (!candidates.length) return null;
+  candidates.sort(
+    (a, b) =>
+      new Date(a.lastUsedAt || 0).getTime() - new Date(b.lastUsedAt || 0).getTime() ||
+      (a.uses || 0) - (b.uses || 0),
+  );
+  return candidates[0];
+}
+
+/**
+ * pggo: AI Studio chat through the server-side WAA signer. The credential is
+ * an AI Studio cookie; the signer mints the BotGuard proof bound to the
+ * request text and hands back the matching session headers.
+ */
 async function handlePggoChat(req, res, body, modelId, stream) {
   const model = lookupPggoModel(modelId);
   if (!model) {
     return sendOpenaiError(res, 404, `model ${modelId} not found`, { code: "model_not_found" });
   }
-  let wire;
-  let binding;
+  const credential = findPggoCredential();
+  if (!credential) {
+    return sendOpenaiError(res, 503, "no pggo credential: import an AI Studio cookie (pggo) credential first", {
+      code: "no_pggo_credential",
+    });
+  }
+  let cookie;
   try {
-    ({ wire, binding } = buildGenerateWire(model, body));
+    cookie = decryptString(credential.cookieEnc, config.dataDir);
   } catch (error) {
-    return sendOpenaiError(res, 400, `could not build the AI Studio request: ${error.message}`, { code: "bad_request" });
+    return sendOpenaiError(res, 500, `could not decrypt the pggo cookie: ${error.message}`, {
+      code: "pggo_cookie_decrypt_failed",
+    });
   }
-  if (!hasExecutor()) {
-    return sendOpenaiError(res, 503, "no browser executor connected: open the executor script on aistudio.google.com (admin -> 执行器)", { code: "no_pggo_executor" });
+  if (!waaSigner.status().enabled) {
+    return sendOpenaiError(res, 503, "the WAA signer is unavailable (WAA_DISABLED=1 or missing binary)", {
+      code: "waa_unavailable",
+    });
   }
+
   const controller = new AbortController();
   res.on("close", () => controller.abort(new Error("client closed the connection")));
+  const options = { cookie, model, body, signal: controller.signal, tier: credential.tier || undefined };
 
   if (!stream) {
     try {
-      const result = await runExecutorJob({ wire, binding }, { signal: controller.signal });
+      const result = await completePggoChat(options);
       const text = String(result.text || "").trim();
       if (!text) throw new Error("AI Studio returned an empty response");
+      store.markOk(credential.id);
       res.setHeader("Content-Type", "application/json; charset=utf-8");
-      return res.json(
-        buildOpenaiResponse({ text, model: modelId, toolCalls: [], usage: openaiUsage(result.usage) }),
-      );
+      return res.json(buildOpenaiResponse({ text, model: modelId, toolCalls: [], usage: openaiUsage(result.usage) }));
     } catch (error) {
       if (controller.signal.aborted) return res.end();
+      store.markError(credential.id, error.message);
       logError(`pggo chat failed: ${error.message}`);
-      return sendOpenaiError(res, error.status || 502, error.message, { type: "pggo_error", code: error.code || "pggo_failed" });
+      return sendOpenaiError(res, error.status || 502, error.message, {
+        type: "pggo_error",
+        code: error.code || "pggo_failed",
+      });
     }
   }
 
@@ -453,42 +487,39 @@ async function handlePggoChat(req, res, body, modelId, stream) {
   const send = (chunk) => res.write(`data: ${JSON.stringify(chunk)}\n\n`);
   let wroteRole = false;
   let usage = null;
+  const ensureRole = () => {
+    if (wroteRole) return;
+    send(buildOpenaiChunk({ id, model: modelId, created, delta: { role: "assistant" } }));
+    wroteRole = true;
+  };
   try {
-    const result = await runExecutorJob(
-      { wire, binding },
-      {
-        signal: controller.signal,
-        onEvent: (event) => {
-          if (controller.signal.aborted) return;
-          if (event.type !== "text" || !event.text) return;
-          if (!wroteRole) {
-            send(buildOpenaiChunk({ id, model: modelId, created, delta: { role: "assistant" } }));
-            wroteRole = true;
-          }
-          send(buildOpenaiChunk({ id, model: modelId, created, delta: { content: event.text } }));
-        },
-      },
-    );
-    usage = result.usage;
+    for await (const frame of streamPggoChat(options)) {
+      if (frame.usage) usage = frame.usage;
+      if (frame.text) {
+        ensureRole();
+        send(buildOpenaiChunk({ id, model: modelId, created, delta: { content: frame.text } }));
+      }
+      if (frame.thoughts) {
+        ensureRole();
+        send(buildOpenaiChunk({ id, model: modelId, created, delta: { reasoning_content: frame.thoughts } }));
+      }
+    }
+    ensureRole();
+    store.markOk(credential.id);
     send(buildOpenaiChunk({ id, model: modelId, created, delta: {}, finishReason: "stop" }));
     if (body.stream_options?.include_usage) {
-      send(
-        buildOpenaiChunk({
-          id,
-          model: modelId,
-          created,
-          delta: {},
-          finishReason: null,
-          usage: openaiUsage(usage),
-        }),
-      );
+      send(buildOpenaiChunk({ id, model: modelId, created, delta: {}, finishReason: null, usage: openaiUsage(usage) }));
     }
     res.write("data: [DONE]\n\n");
     res.end();
   } catch (error) {
     logError(`[pggo stream] ${error.message}`);
+    store.markError(credential.id, error.message);
     if (!res.headersSent) {
-      return sendOpenaiError(res, error.status || 502, error.message, { type: "pggo_error", code: error.code || "pggo_failed" });
+      return sendOpenaiError(res, error.status || 502, error.message, {
+        type: "pggo_error",
+        code: error.code || "pggo_failed",
+      });
     }
     res.write(`data: ${JSON.stringify({ error: { message: error.message, type: "pggo_error" } })}\n\n`);
     res.write("data: [DONE]\n\n");
@@ -569,10 +600,6 @@ app.post("/admin/api/password", requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/admin/api/executor", requireAdmin, (req, res) => {
-  res.json({ ok: true, token: executorToken(), ...executorStatus() });
-});
-
 app.get("/admin/api/logs", requireAdmin, (req, res) => {
   res.json({ logs: recentLogs(Number(req.query.limit) || 200) });
 });
@@ -603,7 +630,7 @@ app.get("/admin/api/overview", requireAdmin, (req, res) => {
       cooldownMs: config.cooldownMs,
       robinApp: config.robinApp,
       robinScopes: config.robinScopes,
-      executorConnected: executorStatus().connected,
+      waa: waaSigner.status(),
     },
     initialPassword: store.admin().generated ? store.admin().plaintextOnce || "" : "",
   });
@@ -812,15 +839,11 @@ const server = app.listen(config.port, config.host, () => {
   for (const warning of ensureConfigWarnings()) logWarn(`config: ${warning}`);
 });
 
-let executorHub = null;
-if (!process.env.ROBIN_GATEWAY_NO_EXECUTOR) {
-  executorHub = attachExecutor(server);
-}
 
 function shutdown(signal) {
   console.log(`${signal} received, shutting down`);
   try {
-    executorHub?.close();
+
   } catch {
     /* ignore */
   }
