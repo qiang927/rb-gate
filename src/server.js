@@ -302,8 +302,8 @@ function webSessionFor(cred) {
       email: cred.email,
       masterToken: decryptString(cred.masterTokenEnc, config.dataDir),
       androidId: cred.androidId,
-      app: cred.app,
-      clientSig: cred.clientSig,
+      app: config.webApp,
+      clientSig: config.webSig,
     });
     webSessions.set(cacheKey, session);
   }
@@ -500,6 +500,8 @@ app.post("/admin/api/credentials/import-robin", requireAdmin, async (req, res) =
   const { email, oauthToken, label, androidId, scopes, app, clientSig } = req.body || {};
   try {
     const result = await provisionRobin({ email, oauthToken, androidId, label, scopes, app, clientSig });
+    if (result.partial) logWarn(`robin import partial (${email || "?"}): ${result.warning}`);
+    else logInfo(`robin import ok (${email || "?"})`);
     res.json({ ok: true, ...result });
   } catch (error) {
     logError(`robin import failed (${email || "?"}): ${error.message}`);

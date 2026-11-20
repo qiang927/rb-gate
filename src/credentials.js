@@ -153,8 +153,8 @@ export async function provisionRobin({ email, oauthToken, androidId, label, scop
   try {
     minted = await mintBearer(normalized, masterToken, draft.androidId, robinOptions(draft));
   } catch (error) {
-    // Keep the master token: the account may still work with a different
-    // app/client_sig combination later.
+    // Keep the master token. The Gemini web channel only needs it, so this is
+    // a usable credential for web-* models even though Code Assist mint failed.
     const credential = store.upsertCredential({
       email: normalized,
       label,
@@ -164,14 +164,17 @@ export async function provisionRobin({ email, oauthToken, androidId, label, scop
       scopes: draft.scopes,
       app: draft.app,
       clientSig: draft.clientSig,
-      status: "error",
+      status: "active",
       lastError: `bearer mint failed: ${error.message}`,
     });
-    throw fail(
-      `master token stored, but minting an access token failed: ${error.message}. ` +
-        "The credential is saved; try a different app/client_sig or re-run the test.",
-      error,
-    );
+    return {
+      ok: true,
+      partial: true,
+      warning:
+        `master token 已保存，但换取 Code Assist access token 失败：${error.message}。` +
+        "这不影响 web- 网页版模型（它们直接用 master token）。",
+      credential: store.getCredential(credential.id),
+    };
   }
 
   const expiresAt = minted.expiryEpochSeconds
@@ -249,6 +252,16 @@ export async function testCredential(id) {
   try {
     token = await ensureAccessToken(forced);
   } catch (error) {
+    if (cred.type === "robin" && cred.masterTokenEnc) {
+      // The master token is what web-* models use; a failed Code Assist mint
+      // does not make the credential useless.
+      return {
+        ok: true,
+        partial: true,
+        warning: `master token 正常，但 Code Assist access token 换取失败：${error.message}。web- 网页版模型仍可用。`,
+        credential: store.getCredential(id),
+      };
+    }
     store.markError(id, error.message);
     throw error;
   }
