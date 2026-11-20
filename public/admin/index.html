@@ -199,7 +199,6 @@
       <button data-tab="credentials" class="active">凭证</button>
       <button data-tab="keys">API Keys</button>
       <button data-tab="models">模型</button>
-      <button data-tab="executor">执行器</button>
       <button data-tab="logs">日志</button>
       <button data-tab="settings">设置</button>
     </div>
@@ -254,24 +253,28 @@
           </details>
         </div>
 
-        <div class="card">
-          <div class="row" style="justify-content:space-between; margin-bottom:8px">
-            <strong>pggo：AI Studio 执行器</strong>
-            <span class="badge pggo">无需导入凭证</span>
-          </div>
-          <p class="hint">
-            pggo 模型不再需要 Cookie：在已登录 <code>aistudio.google.com</code> 的浏览器里装一个脚本，
-            由页面自己生成 WAA 证明并执行请求。网关不接触你的 Cookie，也不跑无头浏览器。
-          </p>
-          <ul class="hint" style="padding-left:18px;line-height:1.9">
-            <li>脚本地址：<a href="/pggo-executor.user.js" target="_blank" rel="noreferrer">/pggo-executor.user.js</a></li>
-            <li>安装后到「执行器」页复制 Token，点油猴菜单填入网关地址与 Token。</li>
-          </ul>
-          <div class="row">
-            <button class="primary" id="gotoExecutor">打开执行器说明</button>
-          </div>
+        <div class="card" id="executorCard">
+        <div class="row" style="justify-content:space-between;margin-bottom:8px">
+          <strong>浏览器执行器</strong>
+          <span class="badge pggo">pggo 组</span>
         </div>
-
+        <p class="hint">
+          pggo 模型由 AI Studio 页面直接执行：脚本运行在你自己已登录的 <code>aistudio.google.com</code> 标签页里，
+          负责生成 WAA 证明、发请求，并把流式结果回传。网关不保存 Cookie，也不需要无头浏览器。
+        </p>
+        <ol class="hint" style="padding-left:18px;line-height:1.9">
+          <li>浏览器安装 Tampermonkey / 油猴。</li>
+          <li>安装脚本：<a href="/pggo-executor.user.js" target="_blank" rel="noreferrer">/pggo-executor.user.js</a></li>
+          <li>打开 <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer">aistudio.google.com</a> 并登录。</li>
+          <li>点油猴菜单「设置网关地址 / Token」，粘贴下面的地址和 Token。</li>
+        </ol>
+        <div class="field">
+          <label>执行器 Token</label>
+          <div class="copy"><code id="executorToken">…</code><button id="copyExecutorToken">复制</button></div>
+        </div>
+        <div class="row" style="margin:10px 0"><button id="executorRefresh">刷新状态</button></div>
+        <pre class="log-box" id="executorStatus" style="height:120px">加载中…</pre>
+      </div>
         <div class="card">
           <div class="row" style="justify-content:space-between; margin-bottom:8px">
             <strong>OAuth 授权导入</strong>
@@ -331,31 +334,6 @@
     </section>
 
     <!-- logs -->
-    <section id="tab-executor" class="hidden">
-      <div class="card">
-        <div class="row" style="justify-content:space-between;margin-bottom:8px">
-          <strong>浏览器执行器</strong>
-          <span class="badge pggo">pggo 组</span>
-        </div>
-        <p class="hint">
-          pggo 模型由 AI Studio 页面直接执行：脚本运行在你自己已登录的 <code>aistudio.google.com</code> 标签页里，
-          负责生成 WAA 证明、发请求，并把流式结果回传。网关不保存 Cookie，也不需要无头浏览器。
-        </p>
-        <ol class="hint" style="padding-left:18px;line-height:1.9">
-          <li>浏览器安装 Tampermonkey / 油猴。</li>
-          <li>安装脚本：<a href="/pggo-executor.user.js" target="_blank" rel="noreferrer">/pggo-executor.user.js</a></li>
-          <li>打开 <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer">aistudio.google.com</a> 并登录。</li>
-          <li>点油猴菜单「设置网关地址 / Token」，粘贴下面的地址和 Token。</li>
-        </ol>
-        <div class="field">
-          <label>执行器 Token</label>
-          <div class="copy"><code id="executorToken">…</code><button id="copyExecutorToken">复制</button></div>
-        </div>
-        <div class="row" style="margin:10px 0"><button id="executorRefresh">刷新状态</button></div>
-        <pre class="log-box" id="executorStatus" style="height:120px">加载中…</pre>
-      </div>
-    </section>
-
     <section id="tab-logs" class="hidden">
       <div class="card">
         <div class="row" style="justify-content:space-between; margin-bottom:8px">
@@ -820,15 +798,11 @@
     }
   });
 
-  $("gotoExecutor").addEventListener("click", () => {
-    document.querySelector('[data-tab="executor"]')?.click();
-  });
-
-  $("copyExecutorToken").addEventListener("click", () => copyText($("executorToken").textContent || ""));
-  $("executorRefresh").addEventListener("click", () => loadExecutor());
+  $("copyExecutorToken")?.addEventListener("click", () => copyText($("executorToken").textContent || ""));
+  $("executorRefresh")?.addEventListener("click", () => loadExecutor());
 
   setInterval(() => {
-    if (!$("tab-executor").classList.contains("hidden")) loadExecutor();
+    if ($("executorCard")) loadExecutor();
   }, 5000);
 
   $("refreshCreds").addEventListener("click", () => loadOverview().then(() => toast("已刷新")).catch((e) => toast(e.message, true)));
@@ -867,7 +841,8 @@
     btn.addEventListener("click", () => {
       document.querySelectorAll(".tabs button").forEach((item) => item.classList.toggle("active", item === btn));
       ["credentials", "keys", "models", "logs", "settings"].forEach((name) => {
-        $(`tab-${name}`).classList.toggle("hidden", name !== btn.dataset.tab);
+        const section = $(`tab-${name}`);
+      if (section) section.classList.toggle("hidden", name !== btn.dataset.tab);
       });
       if (btn.dataset.tab === "logs") loadLogs();
       if (btn.dataset.tab === "executor") loadExecutor();
