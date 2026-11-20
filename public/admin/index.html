@@ -107,6 +107,38 @@
   .modal-bg { position: fixed; inset: 0; background: rgba(4,6,10,.72); display: grid; place-items: center; padding: 20px; z-index: 20; }
   .modal { width: min(720px, 100%); max-height: 86vh; overflow: auto; }
   .kbd { font-family: var(--mono); background: #0d1015; border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; font-size: 11px; }
+  /* ---------- mobile ---------- */
+  @media (max-width: 680px) {
+    .wrap { padding: 16px 12px 64px; }
+    header.top { gap: 10px; margin-bottom: 16px; }
+    header.top h1 { font-size: 16px; }
+    header.top .sub { font-size: 11px; }
+    .card { padding: 14px; border-radius: 12px; }
+    .tabs { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tabs button { flex: 0 0 auto; }
+    .copy { flex-wrap: wrap; }
+    .copy code { white-space: normal; word-break: break-all; }
+    input, select, textarea { font-size: 16px; }
+    button { min-height: 36px; }
+    .toast { left: 12px; right: 12px; bottom: 16px; transform: none; max-width: none; }
+    .toast.show { transform: translateY(-4px); }
+    .modal-bg { padding: 10px; }
+    .modal { max-height: 90vh; }
+    .log-box { max-height: 300px; font-size: 11px; }
+    table.cards thead { display: none; }
+    table.cards, table.cards tbody, table.cards tr, table.cards td { display: block; width: 100%; }
+    table.cards tr { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; margin: 0 0 10px; background: var(--panel-2); }
+    table.cards tr:last-child { margin-bottom: 0; }
+    table.cards td { border: none; padding: 4px 0; }
+    table.cards td[data-label]::before { content: attr(data-label); display: block; color: var(--muted); font-size: 11px; margin-bottom: 1px; }
+    table.cards td.small[style*="max-width"] { max-width: none !important; }
+    table.cards td.actions { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); }
+    table.cards td.actions .row { flex-wrap: wrap !important; gap: 8px !important; }
+    table.cards td.actions button { flex: 1 1 auto; }
+    table.cards td .row { flex-wrap: wrap !important; }
+    table.cards td.mono { overflow-wrap: anywhere; }
+  }
 </style>
 </head>
 <body>
@@ -464,24 +496,24 @@
       const statusText = cooling ? "冷却中" : cred.status || "active";
       const statusClass = cooling ? "" : esc(cred.status || "active");
       return `<tr>
-        <td>
+        <td data-label="账号">
           <div><strong>${esc(cred.label || cred.email || cred.id)}</strong></div>
           <div class="small muted">${esc(cred.email || "")}</div>
         </td>
-        <td><span class="badge ${esc(cred.type)}">${esc(cred.type)}</span></td>
-        <td><span class="badge ${statusClass}">${statusText}</span></td>
-        <td class="small">
+        <td data-label="类型"><span class="badge ${esc(cred.type)}">${esc(cred.type)}</span></td>
+        <td data-label="状态"><span class="badge ${statusClass}">${statusText}</span></td>
+        <td data-label="项目 / 层级" class="small">
           <div class="mono">${esc(cred.projectId || "—")}</div>
           <div class="muted">${esc(cred.tier || "")}</div>
         </td>
-        <td class="small">
+        <td data-label="用量" class="small">
           <div>${cred.uses || 0} 次</div>
           <div class="muted">${esc(ago(cred.lastUsedAt))}</div>
         </td>
-        <td class="small" style="max-width:240px">
+        <td data-label="最近错误" class="small" style="max-width:240px">
           ${cred.lastError ? `<span style="color:var(--red)">${esc(String(cred.lastError).slice(0, 160))}</span>` : '<span class="muted">—</span>'}
         </td>
-        <td>
+        <td class="actions">
           <div class="row" style="gap:6px; flex-wrap:nowrap">
             <button data-act="test" data-id="${esc(cred.id)}">测试</button>
             ${cred.type === "robin" ? `<button data-act="appsig" data-id="${esc(cred.id)}" title="换一组 app/client_sig 重新 mint">改 app</button>` : ""}
@@ -491,7 +523,7 @@
         </td>
       </tr>`;
     }).join("");
-    wrap.innerHTML = `<table>
+    wrap.innerHTML = `<table class="cards">
       <thead><tr><th>账号</th><th>类型</th><th>状态</th><th>项目 / 层级</th><th>用量</th><th>最近错误</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table>`;
     wrap.querySelectorAll("button[data-act]").forEach((btn) => {
@@ -541,13 +573,13 @@
       return;
     }
     const rows = keys.map((key) => `<tr>
-      <td class="mono">${esc(key.key)}</td>
-      <td>${esc(key.name || "")}</td>
-      <td class="small muted">${esc(key.source || "file")}</td>
-      <td class="small muted">${esc(ago(key.createdAt))}</td>
-      <td>${key.source === "env" ? '<span class="muted small">env 管理</span>' : `<button class="danger" data-key="${esc(key.id)}">删除</button>`}</td>
+      <td data-label="Key" class="mono">${esc(key.key)}</td>
+      <td data-label="备注">${esc(key.name || "")}</td>
+      <td data-label="来源" class="small muted">${esc(key.source || "file")}</td>
+      <td data-label="创建" class="small muted">${esc(ago(key.createdAt))}</td>
+      <td class="actions">${key.source === "env" ? '<span class="muted small">env 管理</span>' : `<button class="danger" data-key="${esc(key.id)}">删除</button>`}</td>
     </tr>`).join("");
-    wrap.innerHTML = `<table><thead><tr><th>Key</th><th>备注</th><th>来源</th><th>创建</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    wrap.innerHTML = `<table class="cards"><thead><tr><th>Key</th><th>备注</th><th>来源</th><th>创建</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
     wrap.querySelectorAll("button[data-key]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         if (!confirm("删除这个 API Key？")) return;
@@ -569,12 +601,12 @@
       return;
     }
     const rows = models.map((model) => `<tr>
-      <td class="mono">${esc(model.id)}</td>
-      <td class="small">${esc(model.display_name || "")}</td>
-      <td class="small muted">${model.context_length ? model.context_length.toLocaleString() : "—"}</td>
-      <td class="small muted">${model.max_completion_tokens ? model.max_completion_tokens.toLocaleString() : "—"}</td>
+      <td data-label="模型" class="mono">${esc(model.id)}</td>
+      <td data-label="名称" class="small">${esc(model.display_name || "")}</td>
+      <td data-label="上下文" class="small muted">${model.context_length ? model.context_length.toLocaleString() : "—"}</td>
+      <td data-label="最大输出" class="small muted">${model.max_completion_tokens ? model.max_completion_tokens.toLocaleString() : "—"}</td>
     </tr>`).join("");
-    wrap.innerHTML = `<table><thead><tr><th>模型</th><th>名称</th><th>上下文</th><th>最大输出</th></tr></thead><tbody>${rows}</tbody></table>`;
+    wrap.innerHTML = `<table class="cards"><thead><tr><th>模型</th><th>名称</th><th>上下文</th><th>最大输出</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
   async function changePassword() {
