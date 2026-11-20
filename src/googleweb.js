@@ -8,11 +8,19 @@ const DEFAULT_WEB_SIG = "24bb24c05e47e0aefa68a58a766179d9b613a600";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
 
 export const WEB_MODELS = {
-  "web-gemini-3.7-flash": { mode: 1, think: 4, label: "Gemini 3.7 Flash (Web)" },
-  "web-gemini-3.5-flash-thinking": { mode: 2, think: 0, label: "Gemini 3.5 Flash Thinking (Web)" },
-  "web-gemini-3.1-pro": { mode: 3, think: 4, label: "Gemini 3.1 Pro (Web)" },
-  "web-gemini-auto": { mode: 4, think: 4, label: "Gemini Auto (Web)" },
-  "web-gemini-flash-lite": { mode: 6, think: 4, label: "Gemini Flash-Lite (Web)" },
+  // Gemini 4 family exposed by the current web UI:
+  // Hydrogen = everyday/fast, Neon = deeper analysis (thinking), Carbon = code/complex.
+  "web-gemini-4-hydrogen": { mode: 1, think: 4, label: "Gemini 4 Hydrogen (Web)" },
+  "web-gemini-4-neon": { mode: 2, think: 0, label: "Gemini 4 Neon (Web)" },
+  "web-gemini-4-carbon": { mode: 3, think: 4, label: "Gemini 4 Carbon (Web)" },
+  "web-gemini-4-auto": { mode: 4, think: 4, label: "Gemini 4 Auto (Web)" },
+  "web-gemini-4-flash-lite": { mode: 6, think: 4, label: "Gemini 4 Flash-Lite (Web)" },
+  // Legacy ids kept for clients already wired to them.
+  "web-gemini-3.7-flash": { mode: 1, think: 4, label: "Gemini 4 Hydrogen (Web, legacy id)" },
+  "web-gemini-3.5-flash-thinking": { mode: 2, think: 0, label: "Gemini 4 Neon (Web, legacy id)" },
+  "web-gemini-3.1-pro": { mode: 3, think: 4, label: "Gemini 4 Carbon (Web, legacy id)" },
+  "web-gemini-auto": { mode: 4, think: 4, label: "Gemini 4 Auto (Web, legacy id)" },
+  "web-gemini-flash-lite": { mode: 6, think: 4, label: "Gemini 4 Flash-Lite (Web, legacy id)" },
 };
 
 export function lookupWebModel(id) {

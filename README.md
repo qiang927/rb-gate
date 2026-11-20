@@ -116,11 +116,12 @@ POST /_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate
 
 | 模型 | 说明 |
 |---|---|
-| `web-gemini-3.7-flash` | 默认，全能 |
-| `web-gemini-3.5-flash-thinking` | 深度思考，长输出 |
-| `web-gemini-3.1-pro` | Pro |
-| `web-gemini-auto` | 自动选择 |
-| `web-gemini-flash-lite` | 轻量快速 |
+| `web-gemini-4-hydrogen` | 日常/快速（网页版「日常帮助 4 Hydrogen」，mode=1） |
+| `web-gemini-4-neon` | 深度分析/思考（网页版「更深入的分析 4 Neon」，mode=2） |
+| `web-gemini-4-carbon` | 代码与复杂工作（网页版「代码和复杂工作 4 Carbon」，mode=3） |
+| `web-gemini-4-auto` | 自动选择（mode=4） |
+| `web-gemini-4-flash-lite` | 轻量快速（mode=6） |
+| `web-gemini-3.7-flash` 等旧 ID | 兼容别名，分别映射到上面同一批 mode |
 
 使用前提：凭证池里至少有一条带 master token 的 robin 凭证（面板「导入并验证」成功过一次即可；即使 Code Assist 的 `loadCodeAssist` 报 403，web 通道仍然可用，因为它是另一条链路）。
 
