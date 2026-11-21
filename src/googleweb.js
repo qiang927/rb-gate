@@ -139,9 +139,32 @@ export class GoogleWebSession {
     const merge = await request(
       "https://accounts.google.com/MergeSession?service=mail&continue=https://www.google.com&uberauth=" + encodeURIComponent(uberauth)
     );
-    const cookies = (merge.headers["set-cookie"] || []).map((c) => c.split(";")[0]);
+    let cookies = (merge.headers["set-cookie"] || []).map((c) => c.split(";")[0]);
     if (!cookies.some((c) => c.startsWith("SID="))) {
       throw new WebError(`MergeSession did not return SID cookie (${merge.status})`, { code: "merge_session_failed", retryable: true });
+    }
+    // MergeSession hands out long-lived SID cookies but not the rotating
+    // __Secure-1PSIDTS pair. Google's web apps (gemini.google.com included)
+    // treat a session without a fresh PSIDTS as signed-out, so rotate once.
+    try {
+      const rotate = await request("https://accounts.google.com/RotateCookies", {
+        method: "POST",
+        headers: {
+          cookie: cookies.join("; "),
+          "content-type": "application/json",
+          origin: "https://accounts.google.com",
+        },
+        body: '[000,"-0000000000000000000"]',
+        timeoutMs: 30000,
+      });
+      const extra = (rotate.headers["set-cookie"] || []).map((c) => c.split(";")[0]);
+      for (const item of extra) {
+        const name = item.split("=")[0];
+        cookies = cookies.filter((c) => c.split("=")[0] !== name);
+        cookies.push(item);
+      }
+    } catch {
+      // Best effort: some accounts do not need the rotation round-trip.
     }
     this.cookies = cookies;
     this.cookiesAt = Date.now();
