@@ -137,7 +137,7 @@ export class GoogleWebSession {
     }
     const uberauth = login.body.trim();
     const merge = await request(
-      "https://accounts.google.com/MergeSession?service=mail&continue=https://www.google.com&uberauth=" + encodeURIComponent(uberauth)
+      "https://accounts.google.com/MergeSession?service=mail&continue=https://gemini.google.com/app&uberauth=" + encodeURIComponent(uberauth)
     );
     let cookies = (merge.headers["set-cookie"] || []).map((c) => c.split(";")[0]);
     if (!cookies.some((c) => c.startsWith("SID="))) {
@@ -209,8 +209,17 @@ export class GoogleWebSession {
       await this.ensureCookies({ force: true });
       const where = page.headers.location ? ` -> ${page.headers.location.slice(0, 140)}` : "";
       const jar = (this.cookies || []).map((c) => c.split("=")[0]);
+      let probe = "";
+      try {
+        const check = await request("https://accounts.google.com/ListAccounts?json=1", {
+          headers: { cookie: (this.cookies || []).join("; ") },
+        });
+        probe = ` [ListAccounts ${check.status}: ${check.body.replace(/\s+/g, " ").slice(0, 160)}]`;
+      } catch (error) {
+        probe = ` [ListAccounts failed: ${error.message}]`;
+      }
       throw new WebError(
-        `gemini page failed (${page.status})${where} [merge cookies: ${jar.join(",") || "none"}]`,
+        `gemini page failed (${page.status})${where} [merge cookies: ${jar.join(",") || "none"}]${probe}`,
         { code: "page_failed", retryable: true },
       );
     }
