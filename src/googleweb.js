@@ -210,13 +210,13 @@ export class GoogleWebSession {
       const where = page.headers.location ? ` -> ${page.headers.location.slice(0, 140)}` : "";
       const jar = (this.cookies || []).map((c) => c.split("=")[0]);
       let probe = "";
-      try {
-        const check = await request("https://accounts.google.com/ListAccounts?json=1", {
-          headers: { cookie: (this.cookies || []).join("; ") },
-        });
-        probe = ` [ListAccounts ${check.status}: ${check.body.replace(/\s+/g, " ").slice(0, 160)}]`;
-      } catch (error) {
-        probe = ` [ListAccounts failed: ${error.message}]`;
+      for (const target of ["https://myaccount.google.com/", "https://www.google.com/"]) {
+        try {
+          const check = await request(target, { headers: { cookie: (this.cookies || []).join("; ") } });
+          probe += ` [${new URL(target).hostname} ${check.status}${check.headers.location ? " -> " + check.headers.location.slice(0, 80) : ""}]`;
+        } catch (error) {
+          probe += ` [${new URL(target).hostname} failed: ${error.message}]`;
+        }
       }
       throw new WebError(
         `gemini page failed (${page.status})${where} [merge cookies: ${jar.join(",") || "none"}]${probe}`,
