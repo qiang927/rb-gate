@@ -4,7 +4,7 @@ import express from "express";
 import { config, ensureConfigWarnings } from "./config.js";
 import { importMaster, provisionRobin, testCredential } from "./credentials.js";
 import { UpstreamError } from "./google.js";
-import { GoogleWebSession, WEB_MODELS, isWebModel } from "./googleweb.js";
+import { GoogleWebSession, WEB_MODELS, isWebModel, probeWebCookie } from "./googleweb.js";
 import { decryptString } from "./crypto.js";
 import { listModels, resolveModelId } from "./models.js";
 import { openStream, withCredential } from "./router.js";
@@ -471,6 +471,15 @@ app.post("/admin/api/password", requireAdmin, (req, res) => {
 
 app.get("/admin/api/logs", requireAdmin, (req, res) => {
   res.json({ logs: recentLogs(Number(req.query.limit) || 200) });
+});
+
+app.post("/admin/api/web/probe", requireAdmin, async (req, res) => {
+  try {
+    const result = await probeWebCookie(req.body?.cookie);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
 });
 
 app.get("/admin/api/overview", requireAdmin, (req, res) => {
