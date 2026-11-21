@@ -169,10 +169,20 @@ export class GoogleWebSession {
     if (!force && this.tokens && Date.now() - this.tokens.at < 30 * 60 * 1000) return this.tokens;
     await this.ensureCookies();
     const cookie = this.cookies.join("; ");
-    const page = await request("https://gemini.google.com/app", { headers: { cookie } });
+    let page = await request("https://gemini.google.com/app", { headers: { cookie } });
+    // Gemini sometimes answers /app with a same-site locale redirect; follow it
+    // instead of treating it as an expired session.
+    for (let hop = 0; hop < 3 && page.status >= 300 && page.status < 400; hop += 1) {
+      const location = page.headers.location || "";
+      if (!location) break;
+      const next = new URL(location, "https://gemini.google.com/app");
+      if (next.origin !== "https://gemini.google.com") break;
+      page = await request(next.toString(), { headers: { cookie } });
+    }
     if (page.status !== 200) {
       await this.ensureCookies({ force: true });
-      throw new WebError(`gemini page failed (${page.status})`, { code: "page_failed", retryable: true });
+      const where = page.headers.location ? ` -> ${page.headers.location.slice(0, 140)}` : "";
+      throw new WebError(`gemini page failed (${page.status})${where}`, { code: "page_failed", retryable: true });
     }
     const at = page.body.match(/"SNlM0e":\s*"([^"]+)"/)?.[1];
     const bl = page.body.match(/"cfb2h":\s*"([^"]+)"/)?.[1];
