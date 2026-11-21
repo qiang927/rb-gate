@@ -145,6 +145,9 @@ export class GoogleWebSession {
     }
     this.cookies = cookies;
     this.cookiesAt = Date.now();
+    if (process.env.WEB_DEBUG === "1") {
+      console.error(`[googleweb] merge status=${merge.status} cookies=${cookies.map((c) => c.split("=")[0]).join(",")}`);
+    }
     return cookies;
   }
 
@@ -182,7 +185,11 @@ export class GoogleWebSession {
     if (page.status !== 200) {
       await this.ensureCookies({ force: true });
       const where = page.headers.location ? ` -> ${page.headers.location.slice(0, 140)}` : "";
-      throw new WebError(`gemini page failed (${page.status})${where}`, { code: "page_failed", retryable: true });
+      const jar = (this.cookies || []).map((c) => c.split("=")[0]);
+      throw new WebError(
+        `gemini page failed (${page.status})${where} [merge cookies: ${jar.join(",") || "none"}]`,
+        { code: "page_failed", retryable: true },
+      );
     }
     const at = page.body.match(/"SNlM0e":\s*"([^"]+)"/)?.[1];
     const bl = page.body.match(/"cfb2h":\s*"([^"]+)"/)?.[1];
