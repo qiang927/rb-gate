@@ -110,6 +110,53 @@ function extractTexts(line) {
   }
 }
 
+const COOKIE_ATTRIBUTES = new Set([
+  "path", "domain", "expires", "max-age", "secure", "httponly", "samesite", "priority", "partitioned", "version",
+]);
+
+export function parseCookieJar(raw) {
+  const pairs = String(raw || "")
+    .split(/[;\n]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const cookies = [];
+  for (const pair of pairs) {
+    const clean = pair.replace(/^cookie:\s*/i, "");
+    const index = clean.indexOf("=");
+    if (index <= 0) continue;
+    const name = clean.slice(0, index).trim();
+    if (!name || COOKIE_ATTRIBUTES.has(name.toLowerCase())) continue;
+    cookies.push(clean);
+  }
+  return cookies;
+}
+
+export async function probeWebCookie(rawCookie) {
+  const cookies = parseCookieJar(rawCookie);
+  const cookie = cookies.join("; ");
+  if (!cookie) return { ok: false, error: "empty_cookie" };
+  let page = await request("https://gemini.google.com/app", { headers: { cookie } });
+  const hops = [];
+  for (let i = 0; i < 3 && page.status >= 300 && page.status < 400; i += 1) {
+    const location = page.headers.location || "";
+    hops.push({ status: page.status, location: location.slice(0, 160) });
+    if (!location) break;
+    const next = new URL(location, "https://gemini.google.com/app");
+    if (next.origin !== "https://gemini.google.com") break;
+    page = await request(next.toString(), { headers: { cookie } });
+  }
+  return {
+    ok: page.status === 200,
+    status: page.status,
+    location: page.headers.location ? page.headers.location.slice(0, 200) : null,
+    hops,
+    hasAt: /"SNlM0e":\s*"([^"]+)"/.test(page.body),
+    hasBl: /"cfb2h":\s*"([^"]+)"/.test(page.body),
+    cookieCount: cookies.length,
+    names: cookies.map((c) => c.split("=")[0]),
+  };
+}
+
 export class GoogleWebSession {
   constructor({ email, masterToken, androidId, app = DEFAULT_WEB_APP, clientSig = DEFAULT_WEB_SIG, cookie = "" }) {
     this.email = email;
