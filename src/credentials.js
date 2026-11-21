@@ -2,17 +2,12 @@ import crypto from "node:crypto";
 import { config } from "./config.js";
 import { decryptString, encryptString } from "./crypto.js";
 import { exchangeToken, mintBearer } from "./gpsoauth.js";
-import { prepareCookies } from "./aistudio.js";
-import { completePggoChat } from "./pggo.js";
 import {
   UpstreamError,
   ensureProject,
-  exchangeCode,
-  fetchUserInfo,
+  extractProjectId,
   loadCodeAssist,
   pickTier,
-  refreshAccessToken,
-  extractProjectId,
 } from "./google.js";
 import { store } from "./store.js";
 
@@ -51,16 +46,6 @@ export async function ensureAccessToken(cred) {
     return { accessToken: cred.accessToken, expiresAt: cred.accessExpiresAt, minted: false };
   }
 
-  if (cred.type === "oauth") {
-    if (!cred.refreshTokenEnc) throw fail("oauth credential has no refresh token; re-import it");
-    const refreshToken = decryptString(cred.refreshTokenEnc, config.dataDir);
-    const refreshed = await refreshAccessToken(refreshToken);
-    const expiresAt = Date.now() + (refreshed.expiresIn || 3600) * 1000;
-    const next = { ...cred, ...(refreshed.refreshToken !== refreshToken ? { refreshTokenEnc: encryptString(refreshed.refreshToken, config.dataDir) } : {}) };
-    const result = storeToken(next, refreshed.accessToken, expiresAt);
-    return { ...result, minted: true };
-  }
-
   if (!cred.masterTokenEnc) {
     throw fail("robin credential has no master token; import it again with an oauth_token");
   }
@@ -84,25 +69,6 @@ async function resolveProjectForToken(accessToken, cred) {
   }
 }
 
-async function resolveEmail(accessToken, fallback) {
-  try {
-    const info = await fetchUserInfo(accessToken);
-    return info?.email || fallback || "";
-  } catch {
-    return fallback || "";
-  }
-}
-
-/**
- * Import a credential from the Robin flow: the browser-side oauth_token is
- * exchanged for a long-lived master token, then minted into an access token.
- */
-/**
- * Import a credential from an already-known master token (aas_et/... / oauth2rt/...).
- * Useful when an oauth_token was already exchanged elsewhere and we only
- * need to (re)register the resulting master token, e.g. moving a credential
- * between deployments.
- */
 export async function importMaster({ email, masterToken, androidId, label, scopes, app, clientSig }) {
   const normalized = String(email || "").trim().toLowerCase();
   if (!normalized) throw fail("email is required");
@@ -209,68 +175,11 @@ export async function provisionRobin({ email, oauthToken, androidId, label, scop
 }
 
 /**
- * Import a credential from a standard Google OAuth authorization-code flow
- * (the same flow the Antigravity / Gemini CLI clients use).
- */
-export async function provisionOAuth({ code, redirectUri, codeVerifier, label }) {
-  if (!code) throw fail("authorization code is required");
-  let tokens;
-  try {
-    tokens = await exchangeCode({ code, redirectUri, codeVerifier });
-  } catch (error) {
-    throw fail(`OAuth code exchange failed: ${error.message}`, error);
-  }
-  const accessToken = tokens.access_token;
-  const expiresAt = Date.now() + (Number(tokens.expires_in) || 3600) * 1000;
-  const email = await resolveEmail(accessToken, "");
-  const credential = store.upsertCredential({
-    email,
-    label,
-    type: "oauth",
-    refreshToken: tokens.refresh_token,
-    accessToken,
-    accessExpiresAt: expiresAt,
-    status: "active",
-    lastError: null,
-  });
-  const project = await resolveProjectForToken(accessToken, credential);
-  return {
-    credential: store.getCredential(credential.id),
-    email,
-    projectId: project.projectId,
-    tier: project.tier,
-    warning: project.warning,
-  };
-}
-
-/**
  * Force a token refresh and a Code Assist probe, updating cached metadata.
  */
 export async function testCredential(id) {
   const cred = store.rawCredential(id);
   if (!cred) throw fail("credential not found");
-  if (cred.type === "pggo") {
-    if (!cred.cookieEnc) throw fail("pggo credential has no cookie; re-import it");
-    const cookie = decryptString(cred.cookieEnc, config.dataDir);
-    try {
-      const result = await completePggoChat({
-        cookie,
-        model: { id: "pggo-gemini-4-neon", upstream: "models/gemini-4-neon" },
-        body: { messages: [{ role: "user", content: "Reply with the single word OK." }], max_tokens: 32 },
-        tier: cred.tier || undefined,
-      });
-      store.markOk(id);
-      return {
-        ok: true,
-        channel: "pggo",
-        reply: String(result.text || "").trim().slice(0, 80),
-        credential: store.getCredential(id),
-      };
-    } catch (error) {
-      store.markError(id, error.message);
-      throw error;
-    }
-  }
   const forced = { ...cred, accessToken: "", accessExpiresAt: 0 };
   let token;
   try {
@@ -319,32 +228,6 @@ export function normalizeCookie(raw) {
   const cookies = parts.filter((part) => /^[^=\s]+=.+/.test(part));
   if (!cookies.length) return "";
   return cookies.join("; ");
-}
-
-/**
- * pggo channel: an AI Studio browser session. The cookie is the credential;
- * the server-side WAA signer turns it into BotGuard-proofed MakerSuite calls.
- */
-export async function importPggo({ cookie, email = "", label = "", tier = "" }) {
-  const normalized = normalizeCookie(cookie);
-  if (!normalized) throw fail("Cookie 为空：请粘贴 aistudio.google.com 登录后的完整 Cookie");
-  const prepared = prepareCookies(normalized);
-  if (!prepared.ok) {
-    throw fail(
-      `Cookie 缺少 AI Studio 登录态字段（${prepared.missing.join(", ")}）：请确认从已登录的 aistudio.google.com 复制完整 Cookie（含 SID 与 SAPISID 系列）。`,
-    );
-  }
-  const credential = store.upsertCredential({
-    type: "pggo",
-    group: "pggo",
-    email,
-    label,
-    cookie: prepared.header,
-    status: "active",
-    projectId: "aistudio",
-    tier: tier || "",
-  });
-  return { ok: true, channel: "pggo", credential, verifiedAt: new Date().toISOString() };
 }
 
 export { UpstreamError };

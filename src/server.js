@@ -2,13 +2,9 @@ import crypto from "node:crypto";
 import path from "node:path";
 import express from "express";
 import { config, ensureConfigWarnings } from "./config.js";
-import { importMaster, importPggo, provisionOAuth, provisionRobin, testCredential } from "./credentials.js";
-import { renewRobinCredential } from "./renew.js";
-import { buildAuthUrl, createPkcePair, UpstreamError } from "./google.js";
+import { importMaster, provisionRobin, testCredential } from "./credentials.js";
+import { UpstreamError } from "./google.js";
 import { GoogleWebSession, WEB_MODELS, isWebModel } from "./googleweb.js";
-import { isPggoModel, listPggoModels, lookupPggoModel } from "./aistudio.js";
-import { completePggoChat, streamPggoChat } from "./pggo.js";
-import { waaSigner } from "./waa.js";
 import { decryptString } from "./crypto.js";
 import { listModels, resolveModelId } from "./models.js";
 import { openStream, withCredential } from "./router.js";
@@ -160,14 +156,6 @@ app.get("/v1/models", (req, res) => {
         owned_by: "google-web",
         groups: ["robin"],
       })),
-      ...listPggoModels().map((model) => ({
-        id: model.id,
-        object: "model",
-        created: 1735689600,
-        owned_by: "google-aistudio",
-        groups: ["pggo"],
-        name: model.name,
-      })),
     ],
   });
 });
@@ -180,10 +168,6 @@ app.get("/v1/models/:id", (req, res) => {
   if (isWebModel(req.params.id)) {
     return res.json({ id: req.params.id, object: "model", created: 1735689600, owned_by: "google-web", groups: ["robin"] });
   }
-  const pggo = lookupPggoModel(req.params.id);
-  if (pggo) {
-    return res.json({ id: pggo.id, object: "model", created: 1735689600, owned_by: "google-aistudio", groups: ["pggo"], name: pggo.name });
-  }
   return sendOpenaiError(res, 404, `model ${req.params.id} not found`, { code: "model_not_found" });
 });
 
@@ -193,9 +177,6 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
     return sendOpenaiError(res, 400, "messages must be a non-empty array", { code: "invalid_messages" });
   }
   const stream = Boolean(body.stream);
-  if (isPggoModel(body.model)) {
-    return handlePggoChat(req, res, body, body.model, stream);
-  }
   if (isWebModel(body.model)) {
     return handleWebChat(req, res, body, body.model, stream);
   }
@@ -313,7 +294,7 @@ function findWebCredential() {
   if (!creds.length) return null;
   const pool = creds.filter((cred) => cred.status !== "disabled");
   const usable = pool.length ? pool : creds;
-  // Least-recently used first, so multiple robin/pggo credentials rotate.
+  // Least-recently used first, so multiple robin credentials rotate.
   usable.sort((a, b) => String(a.lastUsedAt || "").localeCompare(String(b.lastUsedAt || "")));
   return usable[0];
 }
@@ -363,7 +344,7 @@ function webPrompt(messages) {
 async function handleWebChat(req, res, body, model, stream) {
   const cred = findWebCredential();
   if (!cred) {
-    return sendOpenaiError(res, 503, "no web credential: import a robin (oauth_token) or pggo (cookie) credential first", { code: "no_web_credential" });
+    return sendOpenaiError(res, 503, "no web credential: import a robin credential (oauth_token) first", { code: "no_web_credential" });
   }
   const session = webSessionFor(cred);
   const prompt = webPrompt(Array.isArray(body.messages) ? body.messages : []);
@@ -410,119 +391,6 @@ async function handleWebChat(req, res, body, model, stream) {
       return sendOpenaiError(res, error.status || 502, error.message, { type: "web_error", code: error.code || "web_failed" });
     }
     res.write(`data: ${JSON.stringify({ error: { message: error.message, type: "web_error" } })}\n\n`);
-    res.write("data: [DONE]\n\n");
-    res.end();
-  }
-}
-
-function findPggoCredential() {
-  const candidates = store
-    .listCredentials()
-    .map((item) => store.rawCredential(item.id))
-    .filter((cred) => cred && cred.type === "pggo" && cred.cookieEnc && cred.status !== "disabled");
-  if (!candidates.length) return null;
-  candidates.sort(
-    (a, b) =>
-      new Date(a.lastUsedAt || 0).getTime() - new Date(b.lastUsedAt || 0).getTime() ||
-      (a.uses || 0) - (b.uses || 0),
-  );
-  return candidates[0];
-}
-
-/**
- * pggo: AI Studio chat through the server-side WAA signer. The credential is
- * an AI Studio cookie; the signer mints the BotGuard proof bound to the
- * request text and hands back the matching session headers.
- */
-async function handlePggoChat(req, res, body, modelId, stream) {
-  const model = lookupPggoModel(modelId);
-  if (!model) {
-    return sendOpenaiError(res, 404, `model ${modelId} not found`, { code: "model_not_found" });
-  }
-  const credential = findPggoCredential();
-  if (!credential) {
-    return sendOpenaiError(res, 503, "no pggo credential: import an AI Studio cookie (pggo) credential first", {
-      code: "no_pggo_credential",
-    });
-  }
-  let cookie;
-  try {
-    cookie = decryptString(credential.cookieEnc, config.dataDir);
-  } catch (error) {
-    return sendOpenaiError(res, 500, `could not decrypt the pggo cookie: ${error.message}`, {
-      code: "pggo_cookie_decrypt_failed",
-    });
-  }
-  if (!waaSigner.status().enabled) {
-    return sendOpenaiError(res, 503, "the WAA signer is unavailable (WAA_DISABLED=1 or missing binary)", {
-      code: "waa_unavailable",
-    });
-  }
-
-  const controller = new AbortController();
-  res.on("close", () => controller.abort(new Error("client closed the connection")));
-  const options = { cookie, model, body, signal: controller.signal, tier: credential.tier || undefined };
-
-  if (!stream) {
-    try {
-      const result = await completePggoChat(options);
-      const text = String(result.text || "").trim();
-      if (!text) throw new Error("AI Studio returned an empty response");
-      store.markOk(credential.id);
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      return res.json(buildOpenaiResponse({ text, model: modelId, toolCalls: [], usage: openaiUsage(result.usage) }));
-    } catch (error) {
-      if (controller.signal.aborted) return res.end();
-      store.markError(credential.id, error.message);
-      logError(`pggo chat failed: ${error.message}`);
-      return sendOpenaiError(res, error.status || 502, error.message, {
-        type: "pggo_error",
-        code: error.code || "pggo_failed",
-      });
-    }
-  }
-
-  const id = `chatcmpl-${crypto.randomBytes(12).toString("hex")}`;
-  const created = Math.floor(Date.now() / 1000);
-  res.writeHead(200, openaiSseHeaders());
-  const send = (chunk) => res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-  let wroteRole = false;
-  let usage = null;
-  const ensureRole = () => {
-    if (wroteRole) return;
-    send(buildOpenaiChunk({ id, model: modelId, created, delta: { role: "assistant" } }));
-    wroteRole = true;
-  };
-  try {
-    for await (const frame of streamPggoChat(options)) {
-      if (frame.usage) usage = frame.usage;
-      if (frame.text) {
-        ensureRole();
-        send(buildOpenaiChunk({ id, model: modelId, created, delta: { content: frame.text } }));
-      }
-      if (frame.thoughts) {
-        ensureRole();
-        send(buildOpenaiChunk({ id, model: modelId, created, delta: { reasoning_content: frame.thoughts } }));
-      }
-    }
-    ensureRole();
-    store.markOk(credential.id);
-    send(buildOpenaiChunk({ id, model: modelId, created, delta: {}, finishReason: "stop" }));
-    if (body.stream_options?.include_usage) {
-      send(buildOpenaiChunk({ id, model: modelId, created, delta: {}, finishReason: null, usage: openaiUsage(usage) }));
-    }
-    res.write("data: [DONE]\n\n");
-    res.end();
-  } catch (error) {
-    logError(`[pggo stream] ${error.message}`);
-    store.markError(credential.id, error.message);
-    if (!res.headersSent) {
-      return sendOpenaiError(res, error.status || 502, error.message, {
-        type: "pggo_error",
-        code: error.code || "pggo_failed",
-      });
-    }
-    res.write(`data: ${JSON.stringify({ error: { message: error.message, type: "pggo_error" } })}\n\n`);
     res.write("data: [DONE]\n\n");
     res.end();
   }
@@ -620,7 +488,6 @@ app.get("/admin/api/overview", requireAdmin, (req, res) => {
     models: [
       ...listModels(),
       ...Object.entries(WEB_MODELS).map(([id, cfg]) => ({ id, display_name: cfg.label, ownedBy: "google-web", groups: ["robin"] })),
-      ...listPggoModels().map((model) => ({ id: model.id, display_name: model.name, ownedBy: "google-aistudio", groups: ["pggo"] })),
     ],
     apiKeys: store.listApiKeys(),
     admin: { source: store.adminSource() },
@@ -631,7 +498,6 @@ app.get("/admin/api/overview", requireAdmin, (req, res) => {
       cooldownMs: config.cooldownMs,
       robinApp: config.robinApp,
       robinScopes: config.robinScopes,
-      waa: waaSigner.status(),
     },
     initialPassword: store.admin().generated ? store.admin().plaintextOnce || "" : "",
   });
@@ -664,23 +530,6 @@ app.post("/admin/api/credentials/import-robin", requireAdmin, async (req, res) =
   }
 });
 
-app.post("/admin/api/robin/renew", requireAdmin, async (req, res) => {
-  const { credentialId = "" } = req.body || {};
-  try {
-    const result = await renewRobinCredential(credentialId || undefined);
-    if (result.ok) {
-      logInfo(`robin renew ok (${result.credential?.email || credentialId}): ${result.partial ? "partial" : "full"}`);
-      res.json(result);
-    } else {
-      logWarn(`robin renew failed (${credentialId || "?"}): ${result.reason}`);
-      res.status(400).json(result);
-    }
-  } catch (error) {
-    logError(`robin renew error (${credentialId || "?"}): ${error.message}`);
-    res.status(400).json({ ok: false, error: error.message });
-  }
-});
-
 app.post("/admin/api/credentials/import-master", requireAdmin, async (req, res) => {
   const { email, masterToken, label, androidId, scopes, app, clientSig } = req.body || {};
   try {
@@ -690,45 +539,6 @@ app.post("/admin/api/credentials/import-master", requireAdmin, async (req, res) 
   } catch (error) {
     logError(`master import failed (${email || "?"}): ${error.message}`);
     res.status(400).json({ ok: false, error: error.message });
-  }
-});
-
-app.post("/admin/api/credentials/import-pggo", requireAdmin, async (req, res) => {
-  const { cookie, email = "", label = "" } = req.body || {};
-  try {
-    const result = await importPggo({ cookie, email, label });
-    logInfo(`pggo import ok (${email || result.credential.id})`);
-    res.json(result);
-  } catch (error) {
-    logError(`pggo import failed (${email || "?"}): ${error.message}`);
-    res.status(400).json({ ok: false, error: error.message });
-  }
-});
-
-app.post("/admin/api/pggo/probe", requireAdmin, async (req, res) => {
-  const { model = "pggo-gemini-4-neon", tier = "", prompt = "Reply with OK" } = req.body || {};
-  const target = lookupPggoModel(model);
-  if (!target) return res.status(400).json({ ok: false, error: `unknown pggo model ${model}` });
-  const credential = findPggoCredential();
-  if (!credential) return res.status(400).json({ ok: false, error: "no pggo credential" });
-  let cookie;
-  try {
-    cookie = decryptString(credential.cookieEnc, config.dataDir);
-  } catch (error) {
-    return res.status(500).json({ ok: false, error: `cookie decrypt failed: ${error.message}` });
-  }
-  try {
-    const started = Date.now();
-    const result = await completePggoChat({
-      cookie, model: target, body: { messages: [{ role: "user", content: prompt }], max_tokens: 512 },
-      tier: tier || undefined,
-    });
-    res.json({
-      ok: true, model, tier: tier || config.waa.defaultTier, elapsedMs: Date.now() - started,
-      text: String(result.text || "").slice(0, 400), finishReason: result.finishReason,
-    });
-  } catch (error) {
-    res.json({ ok: false, model, tier: tier || config.waa.defaultTier, code: error.code || "pggo_failed", error: error.message });
   }
 });
 
@@ -802,40 +612,6 @@ app.delete("/admin/api/keys/:id", requireAdmin, (req, res) => {
   }
 });
 
-app.get("/admin/api/oauth/url", requireAdmin, (req, res) => {
-  const origin = `${req.protocol}://${req.get("host")}`;
-  const redirectUri = `${origin}/admin/oauth/callback`;
-  const { verifier, challenge } = createPkcePair();
-  const state = crypto.randomBytes(16).toString("hex");
-  pendingOauth.set(state, { verifier, redirectUri, createdAt: Date.now() });
-  try {
-    const url = buildAuthUrl({ state, redirectUri, codeChallenge: challenge });
-    res.json({ url, redirectUri, state });
-  } catch (error) {
-    pendingOauth.delete(state);
-    sendOpenaiError(res, 400, error.message, { type: "invalid_request_error", code: "oauth_client_unconfigured" });
-  }
-});
-
-const pendingOauth = new Map();
-
-app.get("/admin/oauth/callback", async (req, res) => {
-  const { code, state } = req.query;
-  const pending = typeof state === "string" ? pendingOauth.get(state) : null;
-  if (!code || !pending) return res.status(400).send("invalid OAuth callback (state mismatch or expired)");
-  pendingOauth.delete(state);
-  try {
-    const result = await provisionOAuth({
-      code: String(code),
-      redirectUri: pending.redirectUri,
-      codeVerifier: pending.verifier,
-      label: "oauth import",
-    });
-    return res.redirect(`/admin/?imported=${encodeURIComponent(result.email || "1")}`);
-  } catch (error) {
-    return res.status(400).send(`OAuth import failed: ${error.message}`);
-  }
-});
 
 // ---------------------------------------------------------------------------
 // Admin UI + static assets

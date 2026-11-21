@@ -89,8 +89,6 @@
   .badge.error { color: var(--red); border-color: #4a2727; background: #1f1010; }
   .badge.disabled { color: var(--muted); }
   .badge.robin { color: #9db4ff; border-color: #2a3760; background: #121a30; }
-  .badge.oauth { color: #e0b3ff; border-color: #402a60; background: #1a1230; }
-  .badge.pggo { color: #7dd3a8; border-color: #1f4735; background: #0f1f18; }
   .cred-group + .cred-group { margin-top: 20px; }
   .group-head { margin-bottom: 8px; }
   .group-head h4 { margin: 0 0 2px; font-size: 14px; }
@@ -213,7 +211,7 @@
           </div>
           <p class="hint">
             从浏览器里取出 <code>oauth_token</code> Cookie（值形如 <code>oauth2_4/…</code>），粘贴到这里。
-            服务端会用 gpsoauth 换成长期 master token，再 mint 出访问令牌；之后自动续期，不用再登录。
+            服务端会用 gpsoauth 换成长期 master token，再 mint 出访问令牌。master token 长期有效，但如果之后修改 Google 密码，需要重新导入一次。
           </p>
           <div class="field"><label>Google 邮箱</label><input id="robinEmail" type="email" placeholder="you@gmail.com" /></div>
           <div class="field"><label>oauth_token</label><textarea id="robinToken" placeholder="oauth2_4/0A…" spellcheck="false"></textarea></div>
@@ -253,57 +251,6 @@
           </details>
         </div>
 
-        <div class="card" id="pggoCard">
-          <div class="row" style="justify-content:space-between;margin-bottom:8px">
-            <strong>导入 pggo 凭证（AI Studio）</strong>
-            <span class="badge pggo">pggo 组</span>
-          </div>
-          <p class="hint">
-            从已登录的 <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer">aistudio.google.com</a>
-            复制 Cookie（F12 → Console 里执行 <code>document.cookie</code>，或 Application → Cookies）。
-            服务端内置 WAA 签名器（Go + SpiderMonkey）负责生成 BotGuard 证明并直接调用 AI Studio 的 MakerSuite RPC，
-            不需要保持标签页打开，也不会上传 Cookie 到第三方。
-          </p>
-          <div class="field"><label>Google 邮箱（可选）</label><input id="pggoEmail" type="email" placeholder="you@gmail.com" /></div>
-          <div class="field"><label>AI Studio Cookie</label><textarea id="pggoCookie" placeholder="SID=…; HSID=…; SSID=…; APISID=…; SAPISID=…; __Secure-1PSID=…" spellcheck="false"></textarea></div>
-          <div class="field"><label>备注（可选）</label><input id="pggoLabel" placeholder="个人号 / 小号" /></div>
-          <div class="row"><button id="importPggoBtn">导入</button></div>
-          <p class="hint" style="margin-top:8px">Cookie 等价登录态，只导入到自己的实例；失效后重新复制即可。</p>
-        </div>
-
-        <div class="card" id="waaCard">
-          <div class="row" style="justify-content:space-between;margin-bottom:8px">
-            <strong>WAA 签名器</strong>
-            <span class="badge" id="waaBadge">…</span>
-          </div>
-          <p class="hint">
-            pggo 通道依赖容器内的原生签名器：它把账号 Cookie 还原成 AI Studio 会话，为每次请求生成 BotGuard 证明。
-            签名器随 Docker 镜像一起构建；本地开发需要先跑 <code>waa-signer/build.sh</code>。
-          </p>
-          <pre class="log-box" id="waaStatus" style="height:120px">加载中…</pre>
-        </div>
-
-        <div class="card">
-          <div class="row" style="justify-content:space-between; margin-bottom:8px">
-            <strong>OAuth 授权导入</strong>
-            <span class="badge oauth">AGY 组 · Antigravity 流程</span>
-          </div>
-          <p class="hint">
-            走标准 Google OAuth（与 Antigravity / Gemini CLI 相同的 client），拿到 refresh_token 后由服务端自动刷新。
-            适合不方便从浏览器抠 Cookie 的场景。
-          </p>
-          <div class="row" style="margin-top:10px">
-            <button id="oauthUrlBtn">生成授权链接</button>
-            <button class="ghost" id="oauthOpenBtn" disabled>打开</button>
-          </div>
-          <div class="copy hidden" id="oauthUrlBox" style="margin-top:10px">
-            <code id="oauthUrl">–</code>
-            <button class="ghost" id="copyOauth">复制</button>
-          </div>
-          <p class="hint" style="margin-top:10px">
-            回调地址是本服务的 <code>/admin/oauth/callback</code>；授权完成后自动回到此页。若在无头环境，把链接发给能打开浏览器的设备即可。
-          </p>
-        </div>
       </div>
 
       <div class="card" style="margin-top:14px">
@@ -484,35 +431,6 @@
     }
   }
 
-  function renderWaa(waa) {
-    const box = $("waaStatus");
-    const badge = $("waaBadge");
-    if (!box || !badge) return;
-    if (!waa) {
-      box.textContent = "签名器状态未知（刷新概览重试）";
-      badge.textContent = "未知";
-      badge.className = "badge";
-      return;
-    }
-    const available = Boolean(waa.available);
-    badge.textContent = available ? "运行中" : waa.binaryExists ? "待启动" : "缺失";
-    badge.className = `badge ${available ? "robin" : "agy"}`;
-    box.textContent = [
-      `路径：${waa.binary || "?"}`,
-      `二进制：${waa.binaryExists ? "存在" : "不存在（本地需构建；Render 用 Docker 镜像自带）"}`,
-      `引擎：${waa.engine || "—"}`,
-      `状态：${available ? "已就绪" : waa.enabled ? "尚未启动（首次 pggo 请求时启动）" : "已禁用（WAA_DISABLED=1）"}`,
-      `最近错误：${waa.lastError || "无"}`,
-    ].join("\n");
-  }
-
-  function startLogPolling() {
-    if (logTimer) return;
-    logTimer = setInterval(() => {
-      if (!$("tab-logs").classList.contains("hidden") && $("logAuto").checked) loadLogs();
-    }, 5000);
-  }
-
   async function showApp() {
     $("loginView").classList.add("hidden");
     $("appView").classList.remove("hidden");
@@ -524,7 +442,6 @@
 
   async function loadOverview() {
     overview = await api("/admin/api/overview");
-    renderWaa(overview.settings?.waa);
     const stats = overview.stats || {};
     $("statCreds").textContent = stats.credentials ?? 0;
     $("statActive").textContent = `${stats.active ?? 0} / ${stats.error ?? 0}`;
@@ -544,9 +461,7 @@
   }
 
   const CRED_GROUPS = [
-    { id: "robin", title: "robin 组", note: "oauth_token → master token → mint → 网页版 Gemini。一次导入、长期自动续期。" },
-    { id: "pggo", title: "pggo 组", note: "AI Studio 通道：保存 AI Studio Cookie，由服务端 WAA 签名器直接调用 MakerSuite RPC。" },
-    { id: "agy", title: "AGY 组", note: "Antigravity / Code Assist OAuth，走 Code Assist 上游（高阶模型）。" },
+    { id: "robin", title: "robin 凭证", note: "oauth_token → master token → 换取 bearer / 网页版 Cookie，驱动 web-* 与 agy-* 模型。" },
   ];
 
   function credRow(cred) {
@@ -574,7 +489,7 @@
       <td class="actions">
         <div class="row" style="gap:6px; flex-wrap:nowrap">
           <button data-act="test" data-id="${esc(cred.id)}">测试</button>
-          ${cred.type === "robin" ? `<button data-act="appsig" data-id="${esc(cred.id)}" title="换一组 app/client_sig 重新 mint">改 app</button><button data-act="renew" data-id="${esc(cred.id)}" title="用同账号 pggo Cookie 自动续 master token">续期</button>` : ""}
+          ${cred.type === "robin" ? `<button data-act="appsig" data-id="${esc(cred.id)}" title="换一组 app/client_sig 重新 mint">改 app</button>` : ""}
           <button data-act="toggle" data-id="${esc(cred.id)}" data-status="${esc(cred.status)}">${cred.status === "disabled" ? "启用" : "禁用"}</button>
           <button class="danger" data-act="delete" data-id="${esc(cred.id)}">删除</button>
         </div>
@@ -585,12 +500,12 @@
   function renderCredentials(creds) {
     const wrap = $("credsTableWrap");
     if (!creds.length) {
-      wrap.innerHTML = '<div class="empty">还没有凭证。先在下面导入 robin / pggo 凭证，或走 OAuth 授权。</div>';
+      wrap.innerHTML = '<div class="empty">还没有凭证。先在下面导入 robin 凭证（oauth_token 或 master token）。</div>';
       return;
     }
-    const byGroup = { robin: [], pggo: [], agy: [] };
+    const byGroup = { robin: [] };
     for (const cred of creds) {
-      const group = cred.group === "pggo" || cred.group === "agy" ? cred.group : "robin";
+      const group = "robin";
       byGroup[group].push(cred);
     }
     wrap.innerHTML = CRED_GROUPS.map((group) => {
@@ -616,7 +531,7 @@
       if (act === "test") {
         toast("测试中…");
         const result = await api(`/admin/api/credentials/${encodeURIComponent(id)}/test`, { method: "POST" });
-        const detail = result.channel === "pggo" ? "Cookie 有效" : `project=${result.projectId || "?"} tier=${result.tier || "?"}`;
+        const detail = `project=${result.projectId || "?"} tier=${result.tier || "?"}`;
         toast(`可用 · ${detail}`);
         await loadOverview();
       } else if (act === "appsig") {
@@ -631,12 +546,6 @@
         toast("已更新，正在重新测试…");
         const result = await api(`/admin/api/credentials/${encodeURIComponent(id)}/test`, { method: "POST" });
         toast(`可用 · project=${result.projectId || "?"} tier=${result.tier || "?"}`);
-        await loadOverview();
-      } else if (act === "renew") {
-        toast("正在用同账号 Cookie 续期 master token…");
-        const result = await api("/admin/api/robin/renew", { method: "POST", body: JSON.stringify({ credentialId: id }) });
-        if (result.ok) toast(result.partial ? `续期成功（Code Assist 仍不可用）：${result.warning}` : "续期成功，master token 已更新");
-        else toast(result.reason || "续期失败", true);
         await loadOverview();
       } else if (act === "toggle") {
         const next = status === "disabled" ? "active" : "disabled";
@@ -798,28 +707,6 @@
     }
   });
 
-  $("importPggoBtn").addEventListener("click", async () => {
-    const btn = $("importPggoBtn");
-    btn.disabled = true;
-    try {
-      const result = await api("/admin/api/credentials/import-pggo", {
-        method: "POST",
-        body: JSON.stringify({
-          cookie: $("pggoCookie").value.trim(),
-          email: $("pggoEmail").value.trim(),
-          label: $("pggoLabel").value.trim(),
-        }),
-      });
-      $("pggoCookie").value = "";
-      toast(result.warning ? `导入成功，但：${result.warning}` : "pggo 凭证已导入");
-      await loadOverview();
-    } catch (error) {
-      toast(error.message, true);
-    } finally {
-      btn.disabled = false;
-    }
-  });
-
   $("refreshCreds").addEventListener("click", () => loadOverview().then(() => toast("已刷新")).catch((e) => toast(e.message, true)));
 
   $("addKeyBtn").addEventListener("click", async () => {
@@ -833,18 +720,6 @@
     }
   });
 
-  $("oauthUrlBtn").addEventListener("click", async () => {
-    try {
-      const result = await api("/admin/api/oauth/url");
-      $("oauthUrl").textContent = result.url;
-      $("oauthUrlBox").classList.remove("hidden");
-      $("oauthOpenBtn").disabled = false;
-      $("oauthOpenBtn").onclick = () => window.open(result.url, "_blank", "noopener");
-    } catch (error) {
-      toast(error.message, true);
-    }
-  });
-  $("copyOauth").addEventListener("click", () => copyText($("oauthUrl").textContent));
   $("copyBase").addEventListener("click", () => copyText($("baseUrl").textContent));
   $("logRefreshBtn").addEventListener("click", loadLogs);
 

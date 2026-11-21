@@ -35,12 +35,10 @@ function writeJsonAtomic(file, value) {
   fs.renameSync(tmp, file);
 }
 
-/** Channel groups: robin (oauth_token→master token→web), pggo (cookie push), agy (Code Assist OAuth). */
+/** Every credential belongs to the robin channel (oauth_token -> master token). */
 export function credentialGroup(cred) {
   if (!cred) return "";
   if (cred.group) return cred.group;
-  if (cred.type === "pggo") return "pggo";
-  if (cred.type === "oauth" || cred.type === "agy") return "agy";
   return "robin";
 }
 
@@ -53,12 +51,9 @@ function sanitizeCredential(cred, { reveal = false } = {}) {
   delete copy.accessToken;
   copy.group = credentialGroup(cred);
   copy.hasMasterToken = Boolean(cred.masterTokenEnc);
-  copy.hasCookie = Boolean(cred.cookieEnc);
-  copy.hasRefreshToken = Boolean(cred.refreshTokenEnc);
   if (reveal) {
     if (cred.masterTokenEnc) copy.masterToken = decryptString(cred.masterTokenEnc, config.dataDir);
     if (cred.refreshTokenEnc) copy.refreshToken = decryptString(cred.refreshTokenEnc, config.dataDir);
-    if (cred.cookieEnc) copy.cookie = decryptString(cred.cookieEnc, config.dataDir);
   }
   return copy;
 }
@@ -378,14 +373,9 @@ class Store {
       failures: input.failures ?? existing?.failures ?? 0,
       // Secrets are only rewritten when explicitly supplied.
       masterTokenEnc: input.masterToken ? encryptString(input.masterToken, config.dataDir) : existing?.masterTokenEnc || "",
-      refreshTokenEnc: input.refreshToken ? encryptString(input.refreshToken, config.dataDir) : existing?.refreshTokenEnc || "",
-      cookieEnc: input.cookie ? encryptString(input.cookie, config.dataDir) : existing?.cookieEnc || "",
     };
     if (cred.type === "robin" && !cred.masterTokenEnc) {
       throw new Error("robin credential requires a master token or an oauth_token to exchange");
-    }
-    if (cred.type === "pggo" && !cred.cookieEnc) {
-      throw new Error("pggo credential requires a Google cookie string (SID / __Secure-1PSID)");
     }
     this.saveCredential(cred);
     return sanitizeCredential(cred);
