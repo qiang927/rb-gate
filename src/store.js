@@ -343,19 +343,24 @@ class Store {
   }
 
   upsertCredential(input) {
+    const sameType = (cred) => !input.type || cred.type === input.type;
+    const cohort = this.credentials().filter(sameType);
     const existing = this.credentials().find(
       (cred) =>
         cred.id === input.id ||
         (input.email &&
           cred.email &&
           cred.email.toLowerCase() === input.email.toLowerCase() &&
-          (!input.type || cred.type === input.type)),
+          sameType(cred)) ||
+        // Cookie-only imports often omit the email; reuse the sole credential
+        // instead of piling up a new one on every re-import.
+        (!input.email && cohort.length === 1 && sameType(cred)),
     );
     const now = new Date().toISOString();
     const cred = {
       id: existing?.id || randomId("cred"),
       email: input.email || existing?.email || "",
-      label: input.label ?? existing?.label ?? "",
+      label: input.label || existing?.label || "",
       type: input.type || existing?.type || "robin",
       group: input.group || existing?.group || credentialGroup({ type: input.type || existing?.type || "robin" }),
       androidId: input.androidId || existing?.androidId || randomHex(16),
