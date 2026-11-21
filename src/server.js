@@ -2,11 +2,10 @@ import crypto from "node:crypto";
 import path from "node:path";
 import express from "express";
 import { config, ensureConfigWarnings } from "./config.js";
-import { importMaster, importWebCookie, provisionRobin, testCredential } from "./credentials.js";
+import { importWebCookie, testCredential } from "./credentials.js";
 import { UpstreamError } from "./google.js";
 import { GoogleWebSession, WEB_MODELS, isWebModel, probeWebCookie } from "./googleweb.js";
 import { decryptString } from "./crypto.js";
-import { listModels, resolveModelId } from "./models.js";
 import { openStream, withCredential } from "./router.js";
 import { store } from "./store.js";
 import {
@@ -121,6 +120,18 @@ function requireAdmin(req, res, next) {
   return sendOpenaiError(res, 401, "admin authentication required", { type: "authentication_error", code: "admin_unauthorized" });
 }
 
+
+function webModelEntries() {
+  return Object.entries(WEB_MODELS).map(([id, cfg]) => ({
+    id,
+    display_name: cfg.label,
+    object: "model",
+    created: 1735689600,
+    owned_by: "google-web",
+    groups: ["robin"],
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // Public endpoints
 // ---------------------------------------------------------------------------
@@ -135,39 +146,20 @@ app.get("/health", (req, res) => {
       active: credentials.filter((cred) => cred.status === "active").length,
       error: credentials.filter((cred) => cred.status === "error").length,
     },
-    models: listModels().length,
+    models: webModelEntries().length,
   });
 });
 
 app.get("/v1/models", (req, res) => {
   res.json({
     object: "list",
-    data: [
-      ...listModels().map((model) => ({
-        id: model.id,
-        object: "model",
-        created: 1735689600,
-        owned_by: model.ownedBy || "google",
-      })),
-      ...Object.keys(WEB_MODELS).map((id) => ({
-        id,
-        object: "model",
-        created: 1735689600,
-        owned_by: "google-web",
-        groups: ["robin"],
-      })),
-    ],
+    data: webModelEntries(),
   });
 });
 
 app.get("/v1/models/:id", (req, res) => {
-  const model = listModels().find((item) => item.id === req.params.id);
-  if (model) {
-    return res.json({ id: model.id, object: "model", created: 1735689600, owned_by: model.ownedBy || "google" });
-  }
-  if (isWebModel(req.params.id)) {
-    return res.json({ id: req.params.id, object: "model", created: 1735689600, owned_by: "google-web", groups: ["robin"] });
-  }
+  const model = webModelEntries().find((item) => item.id === req.params.id);
+  if (model) return res.json(model);
   return sendOpenaiError(res, 404, `model ${req.params.id} not found`, { code: "model_not_found" });
 });
 
@@ -177,9 +169,12 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
     return sendOpenaiError(res, 400, "messages must be a non-empty array", { code: "invalid_messages" });
   }
   const stream = Boolean(body.stream);
-  if (isWebModel(body.model)) {
-    return handleWebChat(req, res, body, body.model, stream);
+  if (!isWebModel(body.model)) {
+    return sendOpenaiError(res, 404, `model ${body.model || "(missing)"} is not available; only web-* models are served by this deployment`, {
+      code: "model_not_found",
+    });
   }
+  return handleWebChat(req, res, body, body.model, stream);
 
   const controller = new AbortController();
   res.on("close", () => controller.abort(new Error("client closed the connection")));
@@ -510,8 +505,7 @@ app.get("/admin/api/overview", requireAdmin, (req, res) => {
     credentials,
     stats,
     models: [
-      ...listModels(),
-      ...Object.entries(WEB_MODELS).map(([id, cfg]) => ({ id, display_name: cfg.label, ownedBy: "google-web", groups: ["robin"] })),
+      ...webModelEntries(),
     ],
     apiKeys: store.listApiKeys(),
     admin: { source: store.adminSource() },
@@ -520,50 +514,9 @@ app.get("/admin/api/overview", requireAdmin, (req, res) => {
       requestTimeoutMs: config.requestTimeoutMs,
       maxRetries: config.maxRetries,
       cooldownMs: config.cooldownMs,
-      robinApp: config.robinApp,
-      robinScopes: config.robinScopes,
     },
     initialPassword: store.admin().generated ? store.admin().plaintextOnce || "" : "",
   });
-});
-
-function explainRobinImportError(message) {
-  const text = String(message || "");
-  if (/BadAuthentication|InvalidToken|invalid_token/i.test(text)) {
-    return "oauth_token 是一次性的，换出 master token 后就失效；也可能不是从 Android EmbeddedSetup 流程获取，或与填写的邮箱不一致。请重新走 EmbeddedSetup 登录拿一个新 token。";
-  }
-  if (/RESTRICTED_CLIENT|restricted_client/i.test(text)) {
-    return "这个 Android 应用身份被 Google 限制，无法用来换 token。请改走 OAuth 授权导入（面板里的 OAuth 链接）。";
-  }
-  if (/exchange failed/i.test(text)) {
-    return "Google 拒绝了这次 oauth_token 兑换。确认 token 完整（形如 oauth2_4/…）、未过期、且只提交一次。";
-  }
-  return "";
-}
-
-app.post("/admin/api/credentials/import-robin", requireAdmin, async (req, res) => {
-  const { email, oauthToken, label, androidId, scopes, app, clientSig } = req.body || {};
-  try {
-    const result = await provisionRobin({ email, oauthToken, androidId, label, scopes, app, clientSig });
-    if (result.partial) logWarn(`robin import partial (${email || "?"}): ${result.warning}`);
-    else logInfo(`robin import ok (${email || "?"})`);
-    res.json({ ok: true, ...result });
-  } catch (error) {
-    logError(`robin import failed (${email || "?"}): ${error.message}`);
-    res.status(400).json({ ok: false, error: error.message, hint: explainRobinImportError(error.message) });
-  }
-});
-
-app.post("/admin/api/credentials/import-master", requireAdmin, async (req, res) => {
-  const { email, masterToken, label, androidId, scopes, app, clientSig } = req.body || {};
-  try {
-    const result = await importMaster({ email, masterToken, androidId, label, scopes, app, clientSig });
-    logInfo(`rob-in master imported: ${email || "?"} (${result.credential.id})`);
-    res.json(result);
-  } catch (error) {
-    logError(`master import failed (${email || "?"}): ${error.message}`);
-    res.status(400).json({ ok: false, error: error.message });
-  }
 });
 
 app.post("/admin/api/credentials/:id/test", requireAdmin, async (req, res) => {
@@ -580,34 +533,12 @@ app.post("/admin/api/credentials/:id/test", requireAdmin, async (req, res) => {
 app.patch("/admin/api/credentials/:id", requireAdmin, (req, res) => {
   const cred = store.rawCredential(req.params.id);
   if (!cred) return res.status(404).json({ ok: false, error: "credential not found" });
-  const { label, status, app, clientSig, scopes } = req.body || {};
+  const { label, status } = req.body || {};
   if (label !== undefined) cred.label = String(label).slice(0, 120);
-  if (cred.type === "robin" && (app !== undefined || clientSig !== undefined || scopes !== undefined)) {
-    if (app !== undefined) cred.app = String(app).trim() || cred.app;
-    if (clientSig !== undefined) cred.clientSig = String(clientSig).trim() || cred.clientSig;
-    if (scopes !== undefined) {
-      cred.scopes = Array.isArray(scopes) ? scopes.filter(Boolean) : String(scopes).split(/[\s,]+/).filter(Boolean);
-    }
-    // Force a fresh mint with the new app/client_sig on the next call.
-    cred.accessToken = "";
-    cred.accessExpiresAt = 0;
-    cred.status = "active";
-    cred.lastError = "";
-    cred.cooldownUntil = 0;
-  }
-  if (status !== undefined) {
-    if (!["active", "disabled"].includes(status)) {
-      return res.status(400).json({ ok: false, error: "status must be active or disabled" });
-    }
-    cred.status = status;
-    if (status === "active") {
-      cred.cooldownUntil = 0;
-      cred.failures = 0;
-    }
-  }
+  if (status !== undefined && ["active", "disabled", "error"].includes(status)) cred.status = status;
   cred.updatedAt = new Date().toISOString();
-  store.saveCredential(cred);
-  res.json({ ok: true, credential: store.getCredential(cred.id) });
+  store.persist("credentials", { credentials: store.credentials() }, { immediate: true });
+  res.json({ ok: true, credential: store.listCredentials().find((c) => c.id === cred.id) });
 });
 
 app.delete("/admin/api/credentials/:id", requireAdmin, (req, res) => {
