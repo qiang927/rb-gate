@@ -10,6 +10,7 @@ import {
   pickTier,
 } from "./google.js";
 import { store } from "./store.js";
+import { parseCookieJar, probeWebCookie } from "./googleweb.js";
 
 const TOKEN_SKEW_MS = 5 * 60 * 1000;
 
@@ -231,3 +232,36 @@ export function normalizeCookie(raw) {
 }
 
 export { UpstreamError };
+
+/**
+ * Import a Gemini web session straight from the browser. The server never sees
+ * the account password; it only stores the cookie jar the browser already has.
+ * This is the fallback when Google refuses sessions minted from a master token.
+ */
+export async function importWebCookie({ email = "", cookie, label = "" }) {
+  const raw = String(cookie || "").trim();
+  if (!raw) throw new UpstreamError("缺少 Cookie 内容", { status: 400, code: "empty_cookie" });
+  const jar = parseCookieJar(raw);
+  const names = jar.map((item) => item.split("=")[0]);
+  const missing = ["SID", "SAPISID"].filter((name) => !names.some((n) => n === name || n === "__Secure-1PAPISID"));
+  if (!names.some((n) => n === "SID" || n === "__Secure-1PSID")) {
+    throw new UpstreamError("Cookie 里缺少 SID / __Secure-1PSID，不是有效的 Google 登录态", { status: 400, code: "cookie_no_sid" });
+  }
+  const probe = await probeWebCookie(raw);
+  if (!probe.ok) {
+    throw new UpstreamError(
+      `Cookie 未被 Gemini 接受（HTTP ${probe.status}${probe.location ? ` -> ${probe.location}` : ""}）`,
+      { status: 400, code: "cookie_rejected" },
+    );
+  }
+  const credential = store.upsertCredential({
+    type: "robin",
+    group: "robin",
+    email,
+    label,
+    webCookie: raw,
+    status: "active",
+    lastError: null,
+  });
+  return { ok: true, credential, probe: { status: probe.status, cookies: probe.cookieCount }, missing };
+}
