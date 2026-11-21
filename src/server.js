@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import express from "express";
 import { config, ensureConfigWarnings } from "./config.js";
-import { importMaster, provisionRobin, testCredential } from "./credentials.js";
+import { importMaster, importWebCookie, provisionRobin, testCredential } from "./credentials.js";
 import { UpstreamError } from "./google.js";
 import { GoogleWebSession, WEB_MODELS, isWebModel, probeWebCookie } from "./googleweb.js";
 import { decryptString } from "./crypto.js";
@@ -290,7 +290,7 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
 const webSessions = new Map();
 
 function findWebCredential() {
-  const creds = store.credentials().filter((cred) => cred.masterTokenEnc || cred.cookieEnc);
+  const creds = store.credentials().filter((cred) => cred.webCookieEnc || cred.masterTokenEnc || cred.cookieEnc);
   if (!creds.length) return null;
   const pool = creds.filter((cred) => cred.status !== "disabled");
   const usable = pool.length ? pool : creds;
@@ -303,10 +303,10 @@ function webSessionFor(cred) {
   const cacheKey = `${cred.id}:${cred.updatedAt || ""}`;
   let session = webSessions.get(cacheKey);
   if (!session) {
-    if (cred.cookieEnc) {
+    if (cred.webCookieEnc || cred.cookieEnc) {
       session = new GoogleWebSession({
         email: cred.email,
-        cookie: decryptString(cred.cookieEnc, config.dataDir),
+        cookie: decryptString(cred.webCookieEnc || cred.cookieEnc, config.dataDir),
       });
     } else {
       session = new GoogleWebSession({
@@ -471,6 +471,21 @@ app.post("/admin/api/password", requireAdmin, (req, res) => {
 
 app.get("/admin/api/logs", requireAdmin, (req, res) => {
   res.json({ logs: recentLogs(Number(req.query.limit) || 200) });
+});
+
+app.post("/admin/api/credentials/import-web-cookie", requireAdmin, async (req, res) => {
+  try {
+    const result = await importWebCookie({
+      email: String(req.body?.email || "").trim(),
+      cookie: req.body?.cookie,
+      label: String(req.body?.label || "").trim(),
+    });
+    logInfo(`gemini web cookie imported: ${result.credential?.email || "(no email)"} (${result.probe.cookies} cookies)`);
+    res.json({ ok: true, credential: result.credential, probe: result.probe });
+  } catch (error) {
+    logWarn(`gemini web cookie import failed: ${error.message}`);
+    res.status(error.status || 400).json({ ok: false, error: error.message, code: error.code || "import_failed" });
+  }
 });
 
 app.post("/admin/api/web/probe", requireAdmin, async (req, res) => {
