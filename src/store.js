@@ -49,11 +49,14 @@ function sanitizeCredential(cred, { reveal = false } = {}) {
   delete copy.refreshTokenEnc;
   delete copy.cookieEnc;
   delete copy.accessToken;
+  delete copy.webCookieEnc;
   copy.group = credentialGroup(cred);
   copy.hasMasterToken = Boolean(cred.masterTokenEnc);
+  copy.hasWebCookie = Boolean(cred.webCookieEnc);
   if (reveal) {
     if (cred.masterTokenEnc) copy.masterToken = decryptString(cred.masterTokenEnc, config.dataDir);
     if (cred.refreshTokenEnc) copy.refreshToken = decryptString(cred.refreshTokenEnc, config.dataDir);
+    if (cred.webCookieEnc) copy.webCookie = decryptString(cred.webCookieEnc, config.dataDir);
   }
   return copy;
 }
@@ -373,8 +376,9 @@ class Store {
       failures: input.failures ?? existing?.failures ?? 0,
       // Secrets are only rewritten when explicitly supplied.
       masterTokenEnc: input.masterToken ? encryptString(input.masterToken, config.dataDir) : existing?.masterTokenEnc || "",
+      webCookieEnc: input.webCookie ? encryptString(input.webCookie, config.dataDir) : existing?.webCookieEnc || "",
     };
-    if (cred.type === "robin" && !cred.masterTokenEnc) {
+    if (cred.type === "robin" && !cred.masterTokenEnc && !cred.webCookieEnc) {
       throw new Error("robin credential requires a master token or an oauth_token to exchange");
     }
     this.saveCredential(cred);
