@@ -206,53 +206,6 @@
       <div class="grid cols-2">
         <div class="card">
           <div class="row" style="justify-content:space-between; margin-bottom:8px">
-            <strong>导入 robin 凭证</strong>
-            <span class="badge robin">oauth_token → master token</span>
-          </div>
-          <p class="hint">
-            从浏览器里取出 <code>oauth_token</code> Cookie（值形如 <code>oauth2_4/…</code>），粘贴到这里。
-            服务端会用 gpsoauth 换成长期 master token，再 mint 出访问令牌。master token 长期有效，但如果之后修改 Google 密码，需要重新导入一次。
-          </p>
-          <div class="field"><label>Google 邮箱</label><input id="robinEmail" type="email" placeholder="you@gmail.com" /></div>
-          <div class="field"><label>oauth_token</label><textarea id="robinToken" placeholder="oauth2_4/0A…" spellcheck="false"></textarea></div>
-          <div class="field"><label>备注（可选）</label><input id="robinLabel" placeholder="个人号 / 小号" /></div>
-          <details style="margin:10px 0 12px">
-            <summary>高级：Android 应用身份（app / client_sig）</summary>
-            <div class="hint" style="margin-top:8px">
-              默认 <code>com.google.android.gms</code> + <code>38918a45…</code>。如果报 <code>RESTRICTED_CLIENT</code>，说明这组身份被 Google 限制，换一组即可——不用重新拿 oauth_token 的话，可以在下方凭证行点「改 app」重试。
-            </div>
-            <div class="field"><label>app 包名</label><input id="robinApp" placeholder="com.google.android.gms" spellcheck="false" /></div>
-            <div class="field"><label>client_sig（40 位十六进制）</label><input id="robinSig" placeholder="38918a453d07199354f8b19af05ec6562ced5788" spellcheck="false" /></div>
-          </details>
-          <div class="row">
-            <button class="primary" id="importRobinBtn">导入并验证</button>
-            <span class="hint">导入时会立即验证一次 mint + project 查询</span>
-          </div>
-          <details style="margin-top:14px">
-            <summary>怎么拿 oauth_token？</summary>
-            <div class="hint" style="margin-top:8px">
-              <code>oauth_token</code> 只在 <b>Android 设备添加账号（EmbeddedSetup）</b> 流程里写入；普通的 <code>accounts.google.com</code> 网页登录<b>不会</b>产生这个 Cookie。<br />
-              1. 用无痕窗口打开
-              <a href="https://accounts.google.com/o/android/auth?lang=en&amp;cc=US&amp;langCountry=en_US&amp;xoauth_display_name=Android+Device&amp;tmpl=new_account&amp;source=android&amp;return_user_id=true&amp;flowName=EmbeddedSetupAndroid" target="_blank" rel="noreferrer">Android 设备登录页</a>。<br />
-              2. 用目标账号登录，跟着页面走完（可能显示“添加账号到设备”，不需要真的连接设备）。<br />
-              3. F12 → Application → Cookies → <code>https://accounts.google.com</code>，找 HttpOnly 的 <code>oauth_token</code>（值形如 <code>oauth2_4/…</code>，document.cookie 读不到），复制整段值。<br />
-              4. 粘到上面的表单。它在换出 master token 后即失效；但 master token 等价账号权限，只导入到自己的实例。
-            </div>
-          </details>
-          <details style="margin-top:14px">
-            <summary>已有 master token？直接导入（迁移 / 换部署）</summary>
-            <div class="hint" style="margin-top:8px">
-              master token 是 oauth_token 换出来的长期令牌（形如 <code>aas_et/…</code> 或 <code>oauth2rt_/…</code>）。
-              换了部署、或者 Render 重启清空 <code>/data</code> 之后，用它把凭证塞回去，不必再走一次登录页。
-            </div>
-            <div class="field"><label>Google 邮箱</label><input id="masterEmail" type="email" placeholder="you@gmail.com" /></div>
-            <div class="field"><label>master token</label><textarea id="masterToken" placeholder="aas_et/…" spellcheck="false"></textarea></div>
-            <div class="row"><button id="importMasterBtn">直接导入</button></div>
-          </details>
-        </div>
-
-        <div class="card">
-          <div class="row" style="justify-content:space-between; margin-bottom:8px">
             <strong>Gemini 网页版 Cookie</strong>
             <span class="badge robin">web-* 直连</span>
           </div>
@@ -480,7 +433,7 @@
   }
 
   const CRED_GROUPS = [
-    { id: "robin", title: "robin 凭证", note: "oauth_token → master token → 换取 bearer / 网页版 Cookie，驱动 web-* 与 agy-* 模型。" },
+    { id: "robin", title: "Gemini 网页版 Cookie", note: "浏览器 Cookie 直连，驱动 web-* 模型。" },
   ];
 
   function credRow(cred) {
@@ -492,7 +445,7 @@
         <div><strong>${esc(cred.label || cred.email || cred.id)}</strong></div>
         <div class="small muted">${esc(cred.email || "")}</div>
       </td>
-      <td data-label="类型"><span class="badge ${esc(cred.type)}">${esc(cred.type)}</span></td>
+      <td data-label="类型"><span class="badge robin">${cred.hasWebCookie ? "cookie" : esc(cred.type)}</span></td>
       <td data-label="状态"><span class="badge ${statusClass}">${statusText}</span></td>
       <td data-label="项目 / 层级" class="small">
         <div class="mono">${esc(cred.projectId || "—")}</div>
@@ -508,7 +461,6 @@
       <td class="actions">
         <div class="row" style="gap:6px; flex-wrap:nowrap">
           <button data-act="test" data-id="${esc(cred.id)}">测试</button>
-          ${cred.type === "robin" ? `<button data-act="appsig" data-id="${esc(cred.id)}" title="换一组 app/client_sig 重新 mint">改 app</button>` : ""}
           <button data-act="toggle" data-id="${esc(cred.id)}" data-status="${esc(cred.status)}">${cred.status === "disabled" ? "启用" : "禁用"}</button>
           <button class="danger" data-act="delete" data-id="${esc(cred.id)}">删除</button>
         </div>
@@ -519,7 +471,7 @@
   function renderCredentials(creds) {
     const wrap = $("credsTableWrap");
     if (!creds.length) {
-      wrap.innerHTML = '<div class="empty">还没有凭证。先在下面导入 robin 凭证（oauth_token 或 master token）。</div>';
+      wrap.innerHTML = '<div class="empty">还没有凭证。在上方粘贴 Gemini 网页版 Cookie 导入。</div>';
       return;
     }
     const byGroup = { robin: [] };
@@ -673,58 +625,6 @@
     showLogin();
   });
   $("changePwdBtn").addEventListener("click", changePassword);
-
-  $("importRobinBtn").addEventListener("click", async () => {
-    const email = $("robinEmail").value.trim();
-    const oauthToken = $("robinToken").value.trim();
-    if (!email || !oauthToken) return toast("邮箱和 oauth_token 都要填", true);
-    const btn = $("importRobinBtn");
-    btn.disabled = true;
-    btn.textContent = "导入中…";
-    try {
-      const result = await api("/admin/api/credentials/import-robin", {
-        method: "POST",
-        body: JSON.stringify({
-          email,
-          oauthToken,
-          label: $("robinLabel").value.trim(),
-          app: $("robinApp").value.trim() || undefined,
-          clientSig: $("robinSig").value.trim() || undefined,
-        }),
-      });
-      $("robinToken").value = "";
-      toast(result.warning ? `导入成功，但：${result.warning}` : "导入成功，已取得可用令牌");
-      await loadOverview();
-    } catch (error) {
-      toast(error.message, true);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = "导入并验证";
-    }
-  });
-
-  $("importMasterBtn").addEventListener("click", async () => {
-    const email = $("masterEmail").value.trim() || $("robinEmail").value.trim();
-    const masterToken = $("masterToken").value.trim();
-    if (!email || !masterToken) return toast("邮箱和 master token 都要填", true);
-    const btn = $("importMasterBtn");
-    btn.disabled = true;
-    btn.textContent = "导入中…";
-    try {
-      await api("/admin/api/credentials/import-master", {
-        method: "POST",
-        body: JSON.stringify({ email, masterToken, label: $("robinLabel").value.trim() || "master import" }),
-      });
-      $("masterToken").value = "";
-      toast("master token 已导入");
-      await loadOverview();
-    } catch (error) {
-      toast(error.message, true);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = "直接导入";
-    }
-  });
 
   $("importWebCookieBtn").addEventListener("click", async () => {
     const cookie = $("webCookieInput").value.trim();
