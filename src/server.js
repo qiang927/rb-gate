@@ -3,6 +3,7 @@ import path from "node:path";
 import express from "express";
 import { config, ensureConfigWarnings } from "./config.js";
 import { importMaster, importPggo, provisionOAuth, provisionRobin, testCredential } from "./credentials.js";
+import { renewRobinCredential } from "./renew.js";
 import { buildAuthUrl, createPkcePair, UpstreamError } from "./google.js";
 import { GoogleWebSession, WEB_MODELS, isWebModel } from "./googleweb.js";
 import { isPggoModel, listPggoModels, lookupPggoModel } from "./aistudio.js";
@@ -660,6 +661,23 @@ app.post("/admin/api/credentials/import-robin", requireAdmin, async (req, res) =
   } catch (error) {
     logError(`robin import failed (${email || "?"}): ${error.message}`);
     res.status(400).json({ ok: false, error: error.message, hint: explainRobinImportError(error.message) });
+  }
+});
+
+app.post("/admin/api/robin/renew", requireAdmin, async (req, res) => {
+  const { credentialId = "" } = req.body || {};
+  try {
+    const result = await renewRobinCredential(credentialId || undefined);
+    if (result.ok) {
+      logInfo(`robin renew ok (${result.credential?.email || credentialId}): ${result.partial ? "partial" : "full"}`);
+      res.json(result);
+    } else {
+      logWarn(`robin renew failed (${credentialId || "?"}): ${result.reason}`);
+      res.status(400).json(result);
+    }
+  } catch (error) {
+    logError(`robin renew error (${credentialId || "?"}): ${error.message}`);
+    res.status(400).json({ ok: false, error: error.message });
   }
 });
 
