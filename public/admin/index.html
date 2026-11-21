@@ -251,6 +251,25 @@
           </details>
         </div>
 
+        <div class="card">
+          <div class="row" style="justify-content:space-between; margin-bottom:8px">
+            <strong>Gemini 网页版 Cookie</strong>
+            <span class="badge robin">web-* 直连</span>
+          </div>
+          <p class="hint">
+            服务端用 master token 生成的会话有时会被 Google 判定为未登录（302 到 ServiceLogin）。
+            这时可以直接粘贴浏览器里 <code>gemini.google.com</code> 的 Cookie，绕过服务端登录，供 <code>web-*</code> 模型使用。
+            格式就是请求头里的整段：<code>k=v; k=v; …</code>。Cookie 等价账号网页权限，退出登录即失效。
+          </p>
+          <div class="field"><label>Google 邮箱（可选）</label><input id="webCookieEmail" type="email" placeholder="you@gmail.com" /></div>
+          <div class="field"><label>Cookie</label><textarea id="webCookieInput" placeholder="SID=…; __Secure-1PSID=…; HSID=…" spellcheck="false" style="min-height:110px"></textarea></div>
+          <div class="field"><label>备注（可选）</label><input id="webCookieLabel" placeholder="网页版主号" /></div>
+          <div class="row">
+            <button class="primary" id="importWebCookieBtn">验证并导入</button>
+            <span class="hint">导入前会先请求一次 gemini.google.com 验证</span>
+          </div>
+        </div>
+
       </div>
 
       <div class="card" style="margin-top:14px">
@@ -704,6 +723,32 @@
     } finally {
       btn.disabled = false;
       btn.textContent = "直接导入";
+    }
+  });
+
+  $("importWebCookieBtn").addEventListener("click", async () => {
+    const cookie = $("webCookieInput").value.trim();
+    if (!cookie) return toast("先粘贴 gemini.google.com 的 Cookie", true);
+    const btn = $("importWebCookieBtn");
+    btn.disabled = true;
+    btn.textContent = "验证中…";
+    try {
+      const result = await api("/admin/api/credentials/import-web-cookie", {
+        method: "POST",
+        body: JSON.stringify({
+          email: $("webCookieEmail").value.trim(),
+          cookie,
+          label: $("webCookieLabel").value.trim(),
+        }),
+      });
+      $("webCookieInput").value = "";
+      toast(`Cookie 有效（${result.probe.cookies} 项），web-* 模型已可用`);
+      await loadOverview();
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "验证并导入";
     }
   });
 
