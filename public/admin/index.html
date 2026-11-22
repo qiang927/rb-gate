@@ -277,18 +277,6 @@
 
     <!-- settings -->
     <section id="tab-settings" class="hidden">
-      <div class="card">
-        <strong>运行设置</strong>
-        <div id="settingsBox" class="grid cols-2" style="margin-top:12px"></div>
-        <p class="hint" style="margin-top:12px">
-          通过环境变量修改：<code>ADMIN_PASSWORD</code>、<code>GATEWAY_API_KEYS</code>、<code>ENCRYPTION_KEY</code>、<code>DATA_DIR</code>、
-          <code>ROBIN_APP</code>/<code>ROBIN_CLIENT_SIG</code>、<code>MAX_RETRIES</code>、<code>CREDENTIAL_COOLDOWN_MS</code>、<code>LOG_REQUESTS</code>。
-        </p>
-        <p class="hint">
-          Render 免费实例无持久磁盘：请使用付费磁盘或把 <code>DATA_DIR</code> 指向挂载卷，否则重启后凭证与 API Key 会丢失。
-        </p>
-      </div>
-
       <div class="card" style="margin-top:14px">
         <strong>代理池（Clash 订阅）</strong>
         <p class="hint" style="margin-top:6px">
@@ -443,7 +431,6 @@
     renderCredentials(overview.credentials || []);
     renderKeys(overview.apiKeys || []);
     renderModels(overview.models || []);
-    renderSettings(overview.settings || {});
     if (overview.admin && overview.admin.source === "env") {
       $("passwordHint").textContent = "当前密码由部署环境变量 ADMIN_PASSWORD 提供，请到部署平台修改；面板内修改会被拒绝。";
       ["pwdCurrent", "pwdNew", "pwdConfirm"].forEach((id) => { $(id).disabled = true; });
@@ -638,7 +625,12 @@
     const status = $("proxyStatus");
     if (proxy.running) {
       const removed = proxy.removed ? ` · 已删除 ${proxy.removed} 个（重新导入订阅可恢复）` : "";
-      status.textContent = `运行中 · ${proxy.nodes.length} 个节点 · 当前：${proxy.current || "-"} · 订阅：${proxy.subscriptionHost || "-"}${removed}`;
+      const fastest = proxy.fastest || {};
+      const everyMin = Math.max(1, Math.round((fastest.intervalMs || 600000) / 60000));
+      const fastText = fastest.enabled
+        ? ` · 自动测速：每 ${everyMin} 分钟${fastest.lastAt ? `（上次选 ${fastest.node || "-"}）` : "（启动约 20 秒后首次执行）"}`
+        : " · 自动测速：已关闭";
+      status.textContent = `运行中 · ${proxy.nodes.length} 个节点 · 当前：${proxy.current || "-"} · 订阅：${proxy.subscriptionHost || "-"}${removed}${fastText}`;
     } else {
       status.textContent = proxy.error ? `未运行（${proxy.error}）` : "未启动。";
     }
@@ -649,21 +641,12 @@
     }
     box.innerHTML = proxy.nodes.map((name) => `
       <div class="row" style="justify-content:space-between;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px 10px">
-        <span class="mono small" style="word-break:break-all">${esc(name)}${name === proxy.current ? " · 当前" : ""}</span>
+        <span class="mono small" style="word-break:break-all">${esc(name)}${name === proxy.current ? " · 当前" : ""}${(proxy.fastest && proxy.fastest.node === name) ? ' <span class="badge" style="background:#1d3a26;color:#8ef0b0">最快</span>' : ""}</span>
         <span class="row" style="gap:6px;flex-shrink:0">
           ${delayBadge(name)}
           <button data-proxy-node="${esc(name)}">使用</button>
           <button data-proxy-remove="${esc(name)}" style="color:#ff9c9c">删除</button>
         </span>
-      </div>`).join("");
-  }
-
-  function renderSettings(settings) {
-    const entries = Object.entries(settings);
-    $("settingsBox").innerHTML = entries.map(([key, value]) => `
-      <div class="field">
-        <label>${esc(key)}</label>
-        <div class="mono small" style="word-break:break-all">${esc(typeof value === "string" ? value : JSON.stringify(value))}</div>
       </div>`).join("");
   }
 
