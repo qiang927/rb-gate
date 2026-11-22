@@ -4,7 +4,7 @@ import express from "express";
 import { config, ensureConfigWarnings } from "./config.js";
 import { importWebCookie, testCredential } from "./credentials.js";
 import { UpstreamError } from "./google.js";
-import { GoogleWebSession, WEB_MODELS, isWebModel, probeWebCookie } from "./googleweb.js";
+import { GoogleWebSession, WEB_MODELS, isWebModel, probeWebCookie, probeWebModels } from "./googleweb.js";
 import { decryptString } from "./crypto.js";
 import { openStream, withCredential } from "./router.js";
 import { store } from "./store.js";
@@ -122,15 +122,27 @@ function requireAdmin(req, res, next) {
 }
 
 
+let webModelsCache = null;
+
 function webModelEntries() {
-  return Object.entries(WEB_MODELS).map(([id, cfg]) => ({
-    id,
-    display_name: cfg.label,
-    object: "model",
-    created: 1735689600,
-    owned_by: "google-web",
-    groups: ["robin"],
-  }));
+  const probed = new Map(((webModelsCache && webModelsCache.models) || []).map((item) => [item.id, item]));
+  return Object.entries(WEB_MODELS).map(([id, cfg]) => {
+    const hit = probed.get(id);
+    return {
+      id,
+      display_name: cfg.label,
+      object: "model",
+      created: 1735689600,
+      owned_by: "google-web",
+      groups: ["robin"],
+      metadata: {
+        mode: cfg.mode,
+        available: hit ? hit.ok : null,
+        latency_ms: hit ? hit.ms : null,
+        checked_at: webModelsCache ? webModelsCache.checkedAt : null,
+      },
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -507,6 +519,29 @@ app.get("/admin/api/logs", requireAdmin, (req, res) => {
   res.json({ logs: recentLogs(Number(req.query.limit) || 200) });
 });
 
+app.get("/admin/api/web/models", requireAdmin, (req, res) => {
+  res.json({ ok: true, ...(webModelsCache || { checkedAt: null, models: [] }) });
+});
+
+app.post("/admin/api/web/models/probe", requireAdmin, async (req, res) => {
+  const cred = findWebCredential();
+  if (!cred) return res.status(400).json({ ok: false, error: "还没有导入 Gemini 网页版 Cookie" });
+  try {
+    const session = webSessionFor(cred);
+    const models = await probeWebModels(session);
+    webModelsCache = { checkedAt: Date.now(), models };
+    const available = models.filter((item) => item.ok).length;
+    logInfo(`web models: ${available}/${models.length} presets answered`);
+    store.markUsed(cred.id);
+    store.markOk(cred.id);
+    res.json({ ok: true, ...webModelsCache });
+  } catch (error) {
+    store.markError(cred.id, error.message);
+    logWarn(`web models probe failed: ${error.message}`);
+    res.status(502).json({ ok: false, error: error.message });
+  }
+});
+
 app.post("/admin/api/credentials/import-web-cookie", requireAdmin, async (req, res) => {
   try {
     const result = await importWebCookie({
@@ -619,6 +654,7 @@ app.get("/admin/api/overview", requireAdmin, (req, res) => {
     ],
     apiKeys: store.listApiKeys(),
     admin: { source: store.adminSource() },
+    webModels: webModelsCache || { checkedAt: null, models: [] },
     settings: {
       upstreamBase: config.upstreamBase,
       requestTimeoutMs: config.requestTimeoutMs,
