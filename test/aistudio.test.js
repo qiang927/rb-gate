@@ -2,16 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { FrameStream, buildGenerateWire, isStudioModel, listStudioModels, parseFrame } from "../src/aistudio.js";
 
-const model = { id: "studio-gemini-4-neon", upstream: "models/gemini-4-neon", name: "flash" };
+const model = { id: "pggo-gemini-4-neon", upstream: "models/gemini-4-neon", name: "flash" };
 
-test("lists studio models with upstream ids", () => {
+test("lists pggo models with upstream ids", () => {
   const models = listStudioModels();
   assert.ok(models.length >= 4);
   for (const item of models) {
-    assert.match(item.id, /^studio-/);
+    assert.match(item.id, /^pggo-/);
     assert.match(item.upstream, /^models\//);
   }
-  assert.equal(isStudioModel("studio-gemini-4-neon"), true);
+  assert.equal(isStudioModel("pggo-gemini-4-neon"), true);
   assert.equal(isStudioModel("web-gemini-4-hydrogen"), false);
 });
 
