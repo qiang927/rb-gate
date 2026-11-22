@@ -19,7 +19,8 @@ GoogleWebSession ── GET gemini.google.com/app 取 at/bl
 ## 特性
 
 - **OpenAI 兼容**：`POST /v1/chat/completions`（流式/非流式）、`GET /v1/models`；支持 system、多轮、`stream_options.include_usage`。
-- **10 个 `web-*` 模型**：`web-gemini-4-hydrogen/neon/carbon/auto/flash-lite` + 5 个旧 ID 别名。
+- **5 个 `web-*` 模型**：`web-gemini-4-hydrogen/neon/carbon/auto/flash-lite`（旧 ID 别名已移除）。
+- **动态模型检测**：面板「模型」页可对 5 个预设各发一句 ping，确认此刻真正可用的模型（`/v1/models` 的 `metadata.available` 同步）。
 - **凭证管理**：Cookie 导入（导入前自动验证）、测试、禁用、删除；多凭证按最久未用优先轮换。
 - **管理面板** `/admin/`：凭证、API Keys、模型表、运行日志、改密码。
 - **零数据库**：JSON 文件 + 原子写；Cookie 用 `ENCRYPTION_KEY` 加密；admin 密码 scrypt。
@@ -57,7 +58,8 @@ Cookie 常见有效期几小时到几天；失效后重新粘贴。退出登录 
 | `web-gemini-4-carbon` | 4 Carbon（代码/复杂） |
 | `web-gemini-4-auto` | 自动 |
 | `web-gemini-4-flash-lite` | Flash-Lite |
-| `web-gemini-3.7-flash` 等 5 个 | 旧 ID 别名，映射到上面 5 个 |
+
+模型名以 `web-gemini-4-` 开头；旧 ID（`web-gemini-3.7-flash` 等）已删除。是否可用以面板「模型 → 动态探测」结果为准。
 
 网页版没有 4 Argon；需要 Argon 只能用 Gemini API 付费层（`gemini-4-argon`）。
 
