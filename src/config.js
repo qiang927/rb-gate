@@ -62,6 +62,10 @@ export const config = {
   logRequests: bool(process.env.LOG_REQUESTS, false),
   // Optional outbound HTTP proxy for the Gemini web channel (host:port or a full URL).
   webProxy: (process.env.WEB_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "").trim(),
+  // Bundled mihomo (Clash Meta) core used by the proxy pool.
+  mihomoPath: process.env.MIHOMO_PATH || "/usr/local/bin/mihomo",
+  proxyPort: int(process.env.PROXY_PORT, 7891),
+  proxyControllerPort: int(process.env.PROXY_CONTROLLER_PORT, 9090),
 
   // Optional Cloudflare KV backing store: keeps credentials across restarts
   // when the host has no persistent disk (Render free tier and friends).
