@@ -101,6 +101,7 @@ class ProxyPool {
   constructor() {
     this.child = null;
     this.nodes = [];
+    this.proxies = [];
     this.current = "";
     this.secret = "";
     this.error = "";
@@ -177,13 +178,9 @@ class ProxyPool {
     throw new Error(`mihomo 启动超时：${lastError?.message || "unknown"}`);
   }
 
-  async start(inputUrl) {
-    const url = subscriptionUrl(inputUrl);
-    if (!url) throw new Error("缺少订阅 URL");
+  async apply(proxies, { url = "" } = {}) {
     await this.stop();
-    const text = await fetchText(url);
-    const { nodes, proxies } = parseClashConfig(text);
-    if (!nodes.length) throw new Error("订阅里没有 Clash 节点（需要 proxies 列表，ss/vmess/trojan/hysteria2 等）");
+    if (!proxies.length) throw new Error("没有可用节点");
 
     this.secret = crypto.randomBytes(16).toString("hex");
     const dir = path.join(config.dataDir, "proxy");
@@ -223,13 +220,64 @@ class ProxyPool {
       throw error;
     }
 
-    this.nodes = nodes.map((node) => node.name);
+    this.proxies = proxies;
+    this.nodes = proxies.map((node) => node.name);
     this.current = this.nodes[0];
-    this.subscription = url;
+    if (url) this.subscription = url;
     this.startedAt = Date.now();
     setOutboundProxy(`http://${CONTROLLER}:${this.port}`);
-    logInfo(`proxy pool ready: ${this.nodes.length} nodes (${hostOf(url)})`);
+    logInfo(`proxy pool ready: ${this.nodes.length} nodes (${hostOf(this.subscription)})`);
     return this.status();
+  }
+
+  async start(inputUrl) {
+    const url = subscriptionUrl(inputUrl);
+    if (!url) throw new Error("缺少订阅 URL");
+    const text = await fetchText(url);
+    const { nodes, proxies } = parseClashConfig(text);
+    if (!nodes.length) throw new Error("订阅里没有 Clash 节点（需要 proxies 列表，ss/vmess/trojan/hysteria2 等）");
+    const removed = new Set(store.settings()?.proxyRemoved || []);
+    const kept = proxies.filter((node) => !removed.has(node.name));
+    if (!kept.length) throw new Error("所有节点都被删除了，重新导入订阅可恢复");
+    return await this.apply(kept, { url });
+  }
+
+  async removeNode(name) {
+    if (!this.running) throw new Error("代理池未启动");
+    const target = String(name || "");
+    if (!this.nodes.includes(target)) throw new Error("没有这个节点");
+    const kept = this.proxies.filter((node) => node.name !== target);
+    if (!kept.length) throw new Error("至少需要保留一个节点");
+    const removed = new Set(store.settings()?.proxyRemoved || []);
+    removed.add(target);
+    store.updateSettings({ proxyRemoved: [...removed] });
+    logInfo(`proxy pool: removed node ${target}`);
+    return await this.apply(kept);
+  }
+
+  async testAll() {
+    if (!this.running) throw new Error("代理池未启动");
+    const results = new Array(this.nodes.length);
+    let index = 0;
+    const worker = async () => {
+      while (index < this.nodes.length) {
+        const slot = index;
+        index += 1;
+        const name = this.nodes[slot];
+        try {
+          const out = await this.request(
+            "GET",
+            `/proxies/${encodeURIComponent(name)}/delay?timeout=4000&url=${encodeURIComponent(TEST_URL)}`,
+          );
+          results[slot] = { name, ok: true, delay: Number(out?.delay) || 0 };
+        } catch (error) {
+          results[slot] = { name, ok: false, delay: null, error: error.message };
+        }
+      }
+    };
+    const workers = Array.from({ length: Math.min(8, this.nodes.length) }, () => worker());
+    await Promise.all(workers);
+    return results;
   }
 
   async stop() {
@@ -249,6 +297,7 @@ class ProxyPool {
       }
     }
     this.nodes = [];
+    this.proxies = [];
     this.current = "";
     this.error = "";
     this.startedAt = 0;
@@ -291,6 +340,7 @@ class ProxyPool {
       port: this.port,
       subscriptionHost: this.subscription ? hostOf(this.subscription) : "",
       startedAt: this.startedAt,
+      removed: (store.settings()?.proxyRemoved || []).length,
       binary: config.mihomoPath,
     };
   }
