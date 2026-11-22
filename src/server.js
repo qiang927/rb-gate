@@ -162,7 +162,7 @@ function studioModelEntries() {
       object: "model",
       created: 1735689600,
       owned_by: "google-aistudio",
-      groups: ["aistudio"],
+      groups: ["pggo"],
       metadata: {
         upstream: model.upstream,
         required_tier: studioRequiredTier(model.upstream),
@@ -536,8 +536,8 @@ async function handleStudioChat(req, res, body, modelId, stream) {
   if (!model) return sendOpenaiError(res, 404, `model ${modelId} not found`, { code: "model_not_found" });
   const credential = findStudioCredential();
   if (!credential) {
-    return sendOpenaiError(res, 503, "no AI Studio credential: import an aistudio.google.com cookie first", {
-      code: "no_studio_credential",
+    return sendOpenaiError(res, 503, "no pggo credential: import an aistudio.google.com cookie first", {
+      code: "no_pggo_credential",
     });
   }
   let cookie;
@@ -545,7 +545,7 @@ async function handleStudioChat(req, res, body, modelId, stream) {
     cookie = decryptString(credential.cookieEnc, config.dataDir);
   } catch (error) {
     return sendOpenaiError(res, 500, `could not decrypt the AI Studio cookie: ${error.message}`, {
-      code: "studio_cookie_decrypt_failed",
+      code: "pggo_cookie_decrypt_failed",
     });
   }
   const signer = waaSigner.status();
@@ -575,10 +575,10 @@ async function handleStudioChat(req, res, body, modelId, stream) {
       if (controller.signal.aborted) return res.end();
       const status = error.status || 502;
       store.markError(credential.id, error.message, { cooldownMs: status === 429 ? 60_000 : 0 });
-      logError(`studio chat failed (${status}): ${error.message}`);
+      logError(`pggo chat failed (${status}): ${error.message}`);
       return sendOpenaiError(res, status, explainWaaError(error), {
-        type: "studio_error",
-        code: error.code || "studio_failed",
+        type: "pggo_error",
+        code: error.code || "pggo_failed",
       });
     }
   }
@@ -601,10 +601,10 @@ async function handleStudioChat(req, res, body, modelId, stream) {
     ]);
   } catch (error) {
     if (controller.signal.aborted) return res.end();
-    logError(`studio chat failed (${error.status || 502}): ${error.message}`);
+    logError(`pggo chat failed (${error.status || 502}): ${error.message}`);
     return sendOpenaiError(res, error.status || 502, explainWaaError(error), {
-      type: "studio_error",
-      code: error.code || "studio_failed",
+      type: "pggo_error",
+      code: error.code || "pggo_failed",
     });
   }
 
@@ -651,9 +651,9 @@ async function handleStudioChat(req, res, body, modelId, stream) {
     stopHeartbeat();
   } catch (error) {
     stopHeartbeat();
-    logError(`[studio stream] ${error.message}`);
+    logError(`[pggo stream] ${error.message}`);
     store.markError(credential.id, error.message);
-    res.write(`data: ${JSON.stringify({ error: { message: explainWaaError(error), type: "studio_error" } })}\n\n`);
+    res.write(`data: ${JSON.stringify({ error: { message: explainWaaError(error), type: "pggo_error" } })}\n\n`);
     res.write("data: [DONE]\n\n");
     res.end();
   }
@@ -789,7 +789,7 @@ app.post("/admin/api/credentials/import-web-cookie", requireAdmin, async (req, r
   }
 });
 
-app.post("/admin/api/credentials/import-aistudio", requireAdmin, async (req, res) => {
+app.post(["/admin/api/credentials/import-aistudio", "/admin/api/credentials/import-pggo"], requireAdmin, async (req, res) => {
   try {
     const result = await importAistudio({
       email: String(req.body?.email || "").trim(),
