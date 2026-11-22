@@ -63,8 +63,9 @@
     #credsTableWrap { overflow-x: auto; }
     #credsTableWrap table { min-width: 860px; }
     #credsTableWrap th { white-space: nowrap; }
-    #credsTableWrap td.actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; width: 112px; }
-    #credsTableWrap td.actions .btn { padding: 5px 8px; font-size: 12px; }
+    #credsTableWrap td.actions { width: 128px; }
+    #credsTableWrap td.actions .row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+    #credsTableWrap td.actions button { padding: 5px 6px; font-size: 12px; white-space: nowrap; }
     @media (max-width: 1400px) { #credsTableWrap .col-error { display: none; } }
   }
   .import-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
