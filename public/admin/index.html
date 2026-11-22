@@ -172,6 +172,9 @@
     .input-row { flex-direction: column; }
     .toolbar .search { max-width: none; flex: 1 1 100%; }
     .node-grid { grid-template-columns: 1fr; max-height: 360px; }
+    .node { flex-wrap: wrap; }
+    .node .name { flex: 1 1 100%; }
+    .node .actions { width: 100%; justify-content: flex-end; }
     .card-head { flex-wrap: wrap; }
   }
 </style>
@@ -182,7 +185,7 @@
     <div class="logo">R</div>
     <div>
       <h1>robin gateway</h1>
-      <div class="sub">Code Assist → OpenAI 兼容 · 多凭证管理</div>
+      <div class="sub">Gemini 网页版 → OpenAI 兼容 · 多 Cookie 轮换</div>
     </div>
     <div class="spacer"></div>
     <span class="pill" id="healthPill"><span class="dot" id="healthDot"></span><span id="healthText">检测中…</span></span>
@@ -432,7 +435,8 @@
       const session = await api("/admin/api/session");
       if (session.authenticated) await showApp();
       else showLogin();
-    } catch {
+    } catch (error) {
+      console.error("boot failed:", error && error.stack || error);
       showLogin();
     }
   }
@@ -445,6 +449,16 @@
   }
 
   let logTimer = null;
+
+  function startLogPolling() {
+    if (logTimer) return;
+    logTimer = setInterval(() => {
+      const section = $("tab-logs");
+      const auto = $("logAuto");
+      if (section && !section.classList.contains("hidden") && auto && auto.checked) loadLogs();
+    }, 5000);
+  }
+
 
   async function loadLogs() {
     const box = $("logBox");
