@@ -1,11 +1,17 @@
 # robin-gateway container.
 #
-# One Node process serves the Gemini web channel (web-*) from browser cookies,
-# plus an optional Clash/Mihomo proxy pool for outgoing traffic.
+# One Node process serves two channels:
+#   web-*     Gemini web (gemini.google.com) straight from browser cookies
+#   studio-*  AI Studio (aistudio.google.com) via the native WAA signer below
+# plus a Clash/Mihomo proxy pool for outgoing traffic.
 
 # Mihomo (Clash Meta) core for the proxy pool. Pulled from Docker Hub so the
 # repo does not need to carry a 60MB binary.
 FROM metacubex/mihomo:latest AS mihomo
+
+# WAA (BotGuard) signer for the AI Studio channel. It ships inside the
+# aistudio-api image; copying it keeps a 51MB binary out of the git repo.
+FROM bedrockblock/aistudio-api:latest AS waa
 
 FROM node:22-bookworm-slim
 
@@ -13,6 +19,7 @@ ENV NODE_ENV=production
 ENV PORT=8080
 ENV DATA_DIR=/data
 ENV MIHOMO_PATH=/usr/local/bin/mihomo
+ENV WAA_SIGNER_PATH=/usr/local/bin/waa-signer
 
 WORKDIR /app
 
@@ -21,7 +28,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=mihomo /mihomo /usr/local/bin/mihomo
-RUN chmod 0755 /usr/local/bin/mihomo && /usr/local/bin/mihomo -v | head -1 || true
+COPY --from=waa /app/waa-signer/bin/waa-signer /usr/local/bin/waa-signer
+RUN chmod 0755 /usr/local/bin/mihomo /usr/local/bin/waa-signer \
+    && /usr/local/bin/mihomo -v | head -1 || true
 
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev

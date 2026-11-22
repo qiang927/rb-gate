@@ -2,10 +2,13 @@ import crypto from "node:crypto";
 import path from "node:path";
 import express from "express";
 import { config, ensureConfigWarnings } from "./config.js";
-import { importWebCookie, testCredential } from "./credentials.js";
+import { importAistudio, importWebCookie, testCredential } from "./credentials.js";
 import { UpstreamError } from "./google.js";
 import { GoogleWebSession, WEB_MODELS, fetchWebUsage, isWebModel, probeWebCookie, probeWebModels, requiredTierForModel } from "./googleweb.js";
 import { decryptString } from "./crypto.js";
+import { isStudioModel, listStudioModels, lookupStudioModel, studioRequiredTier } from "./aistudio.js";
+import { completeStudioChat, streamStudioChat } from "./studio.js";
+import { explainWaaError, waaSigner } from "./waa.js";
 import { openStream, withCredential } from "./router.js";
 import { store } from "./store.js";
 import {
@@ -146,6 +149,28 @@ function webModelEntries() {
   });
 }
 
+function studioModelEntries() {
+  const creds = store.credentials().filter((cred) => cred.type === "aistudio" && cred.status !== "disabled");
+  if (!creds.length) return [];
+  const advertised = new Set();
+  for (const cred of creds) for (const upstream of cred.models || []) advertised.add(String(upstream));
+  return listStudioModels()
+    .filter((model) => !advertised.size || advertised.has(model.upstream))
+    .map((model) => ({
+      id: model.id,
+      display_name: model.name,
+      object: "model",
+      created: 1735689600,
+      owned_by: "google-aistudio",
+      groups: ["aistudio"],
+      metadata: {
+        upstream: model.upstream,
+        required_tier: studioRequiredTier(model.upstream),
+        available: null,
+      },
+    }));
+}
+
 // ---------------------------------------------------------------------------
 // Public endpoints
 // ---------------------------------------------------------------------------
@@ -160,19 +185,19 @@ app.get("/health", (req, res) => {
       active: credentials.filter((cred) => cred.status === "active").length,
       error: credentials.filter((cred) => cred.status === "error").length,
     },
-    models: webModelEntries().length,
+    models: webModelEntries().length + studioModelEntries().length,
   });
 });
 
 app.get("/v1/models", (req, res) => {
   res.json({
     object: "list",
-    data: webModelEntries(),
+    data: [...webModelEntries(), ...studioModelEntries()],
   });
 });
 
 app.get("/v1/models/:id", (req, res) => {
-  const model = webModelEntries().find((item) => item.id === req.params.id);
+  const model = [...webModelEntries(), ...studioModelEntries()].find((item) => item.id === req.params.id);
   if (model) return res.json(model);
   return sendOpenaiError(res, 404, `model ${req.params.id} not found`, { code: "model_not_found" });
 });
@@ -183,6 +208,7 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
     return sendOpenaiError(res, 400, "messages must be a non-empty array", { code: "invalid_messages" });
   }
   const stream = Boolean(body.stream);
+  if (isStudioModel(body.model)) return handleStudioChat(req, res, body, body.model, stream);
   if (!isWebModel(body.model)) {
     return sendOpenaiError(res, 404, `model ${body.model || "(missing)"} is not available; only web-* models are served by this deployment`, {
       code: "model_not_found",
@@ -311,7 +337,9 @@ function usageExhausted(usage) {
 }
 
 function findWebCredential() {
-  const creds = store.credentials().filter((cred) => cred.webCookieEnc || cred.masterTokenEnc || cred.cookieEnc);
+  const creds = store.credentials().filter(
+    (cred) => cred.type !== "aistudio" && (cred.webCookieEnc || cred.masterTokenEnc),
+  );
   if (!creds.length) return null;
   const pool = creds.filter((cred) => cred.status !== "disabled");
   const usable = pool.length ? pool : creds;
@@ -494,6 +522,128 @@ async function handleWebChat(req, res, body, model, stream) {
   }
 }
 
+function findStudioCredential() {
+  const creds = store.listCredentials().filter(
+    (cred) => cred.type === "aistudio" && cred.hasCookie && cred.status !== "disabled",
+  );
+  if (!creds.length) return null;
+  creds.sort((a, b) => String(a.lastUsedAt || "").localeCompare(String(b.lastUsedAt || "")));
+  return store.rawCredential(creds[0].id);
+}
+
+async function handleStudioChat(req, res, body, modelId, stream) {
+  const model = lookupStudioModel(modelId);
+  if (!model) return sendOpenaiError(res, 404, `model ${modelId} not found`, { code: "model_not_found" });
+  const credential = findStudioCredential();
+  if (!credential) {
+    return sendOpenaiError(res, 503, "no AI Studio credential: import an aistudio.google.com cookie first", {
+      code: "no_studio_credential",
+    });
+  }
+  let cookie;
+  try {
+    cookie = decryptString(credential.cookieEnc, config.dataDir);
+  } catch (error) {
+    return sendOpenaiError(res, 500, `could not decrypt the AI Studio cookie: ${error.message}`, {
+      code: "studio_cookie_decrypt_failed",
+    });
+  }
+  const signer = waaSigner.status();
+  if (!signer.enabled) {
+    return sendOpenaiError(res, 503, "the WAA signer is disabled (WAA_DISABLED=1)", { code: "waa_disabled" });
+  }
+  if (!signer.binaryExists) {
+    return sendOpenaiError(res, 503, "the WAA signer binary is missing; rebuild the container image", {
+      code: "waa_missing_binary",
+    });
+  }
+
+  const controller = new AbortController();
+  res.on("close", () => controller.abort(new Error("client closed the connection")));
+  const options = { cookie, model, body, signal: controller.signal, tier: credential.tier || undefined };
+
+  if (!stream) {
+    try {
+      const result = await completeStudioChat(options);
+      const text = String(result.text || "").trim();
+      if (!text) throw new Error("AI Studio returned an empty response");
+      store.markUsed(credential.id);
+      store.markOk(credential.id);
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      return res.json(buildOpenaiResponse({ text, model: modelId, toolCalls: [], usage: openaiUsage(result.usage) }));
+    } catch (error) {
+      if (controller.signal.aborted) return res.end();
+      const status = error.status || 502;
+      store.markError(credential.id, error.message, { cooldownMs: status === 429 ? 60_000 : 0 });
+      logError(`studio chat failed (${status}): ${error.message}`);
+      return sendOpenaiError(res, status, explainWaaError(error), {
+        type: "studio_error",
+        code: error.code || "studio_failed",
+      });
+    }
+  }
+
+  // Pull the first frame before flushing SSE headers so cookie/proof failures
+  // can still be reported as JSON.
+  let iterator = null;
+  let firstStep = null;
+  try {
+    const candidate = streamStudioChat(options)[Symbol.asyncIterator]();
+    firstStep = await candidate.next();
+    iterator = candidate;
+  } catch (error) {
+    if (controller.signal.aborted) return res.end();
+    logError(`studio chat failed (${error.status || 502}): ${error.message}`);
+    return sendOpenaiError(res, error.status || 502, explainWaaError(error), {
+      type: "studio_error",
+      code: error.code || "studio_failed",
+    });
+  }
+
+  const id = `chatcmpl-${crypto.randomBytes(12).toString("hex")}`;
+  const created = Math.floor(Date.now() / 1000);
+  res.writeHead(200, openaiSseHeaders());
+  const send = (chunk) => res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+  let wroteRole = false;
+  let usage = null;
+  const ensureRole = () => {
+    if (wroteRole) return;
+    send(buildOpenaiChunk({ id, model: modelId, created, delta: { role: "assistant" } }));
+    wroteRole = true;
+  };
+  try {
+    let step = firstStep;
+    while (!step.done) {
+      const frame = step.value;
+      if (frame.usage) usage = frame.usage;
+      if (frame.text) {
+        ensureRole();
+        send(buildOpenaiChunk({ id, model: modelId, created, delta: { content: frame.text } }));
+      }
+      if (frame.thoughts) {
+        ensureRole();
+        send(buildOpenaiChunk({ id, model: modelId, created, delta: { reasoning_content: frame.thoughts } }));
+      }
+      step = await iterator.next();
+    }
+    ensureRole();
+    store.markUsed(credential.id);
+    store.markOk(credential.id);
+    send(buildOpenaiChunk({ id, model: modelId, created, delta: {}, finishReason: "stop" }));
+    if (body.stream_options?.include_usage) {
+      send(buildOpenaiChunk({ id, model: modelId, created, delta: {}, finishReason: null, usage: openaiUsage(usage) }));
+    }
+    res.write("data: [DONE]\n\n");
+    res.end();
+  } catch (error) {
+    logError(`[studio stream] ${error.message}`);
+    store.markError(credential.id, error.message);
+    res.write(`data: ${JSON.stringify({ error: { message: explainWaaError(error), type: "studio_error" } })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }
+}
+
 function openaiUsage(usage) {
   if (!usage) return { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
   return {
@@ -609,6 +759,24 @@ app.post("/admin/api/credentials/import-web-cookie", requireAdmin, async (req, r
   }
 });
 
+app.post("/admin/api/credentials/import-aistudio", requireAdmin, async (req, res) => {
+  try {
+    const result = await importAistudio({
+      email: String(req.body?.email || "").trim(),
+      cookie: req.body?.cookie,
+      label: String(req.body?.label || "").trim(),
+    });
+    logInfo(
+      `AI Studio cookie imported: ${result.credential?.email || "(no email)"} ` +
+        `tier=${result.account.tier} models=${result.account.models.length}`,
+    );
+    res.json({ ok: true, credential: result.credential, account: result.account });
+  } catch (error) {
+    logWarn(`AI Studio cookie import failed: ${error.message}`);
+    res.status(error.status || 400).json({ ok: false, error: error.message, code: error.code || "import_failed" });
+  }
+});
+
 app.post("/admin/api/web/probe", requireAdmin, async (req, res) => {
   try {
     const result = await probeWebCookie(req.body?.cookie);
@@ -707,9 +875,7 @@ app.get("/admin/api/overview", requireAdmin, (req, res) => {
     credentials,
     tiers,
     stats,
-    models: [
-      ...webModelEntries(),
-    ],
+    models: [...webModelEntries(), ...studioModelEntries()],
     apiKeys: store.listApiKeys(),
     admin: { source: store.adminSource() },
     webModels: webModelsCache || { checkedAt: null, models: [] },
@@ -719,6 +885,7 @@ app.get("/admin/api/overview", requireAdmin, (req, res) => {
       maxRetries: config.maxRetries,
       cooldownMs: config.cooldownMs,
       proxy: proxyPool.status(),
+      waa: waaSigner.status(),
     },
     initialPassword: store.admin().generated ? store.admin().plaintextOnce || "" : "",
   });
@@ -858,6 +1025,7 @@ function shutdown(signal) {
   }
   server.close(() => {
     void proxyPool.stop().catch(() => {});
+    void waaSigner.stop().catch(() => {});
     void store.flush().finally(() => process.exit(0));
   });
   setTimeout(() => process.exit(0), 5000).unref();

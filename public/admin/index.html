@@ -59,6 +59,7 @@
   .field { margin-bottom: 12px; }
   .wrap { max-width: 1440px; margin: 0 auto; padding: 28px 24px 80px; }
   .creds-grid { display: grid; grid-template-columns: 390px minmax(0, 1fr); gap: 16px; align-items: start; }
+  .import-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
   .models-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px; align-items: start; }
   @media (max-width: 1180px) { .creds-grid, .models-grid { grid-template-columns: 1fr; } }
   header.top { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; flex-wrap: wrap; }
@@ -255,6 +256,7 @@
     <!-- credentials -->
     <section id="tab-credentials">
       <div class="creds-grid">
+        <div class="import-stack">
         <div class="card">
           <div class="row" style="justify-content:space-between; margin-bottom:8px">
             <strong>Gemini 网页版 Cookie</strong>
@@ -272,6 +274,26 @@
             <button class="primary" id="importWebCookieBtn">验证并导入</button>
             <span class="hint">导入前会先请求一次 gemini.google.com 验证</span>
           </div>
+        </div>
+
+        <div class="card">
+          <div class="row" style="justify-content:space-between; margin-bottom:8px">
+            <strong>AI Studio Cookie</strong>
+            <span class="badge robin">studio-* 直连</span>
+          </div>
+          <p class="hint">
+            粘贴浏览器里 <code>aistudio.google.com</code> 的 Cookie（<strong>不是</strong> gemini.google.com 的）。
+            走 Google AI Studio 的 MakerSuite 私有 RPC，需要服务端 WAA 签名器生成 BotGuard 证明；
+            导入时会自动校验登录态，并读取该账号的档位（Free/Pro/Ultra）与真实可用模型。
+          </p>
+          <div class="field"><label>Google 邮箱（可选）</label><input id="aiStudioEmail" type="email" placeholder="you@gmail.com" /></div>
+          <div class="field"><label>Cookie</label><textarea id="aiStudioCookie" placeholder="SID=…; __Secure-1PSID=…; SAPISID=…" spellcheck="false" style="min-height:110px"></textarea></div>
+          <div class="field"><label>备注（可选）</label><input id="aiStudioLabel" placeholder="AI Studio 主号" /></div>
+          <div class="row">
+            <button class="primary" id="importAiStudioBtn">验证并导入</button>
+            <span class="hint">导入时会查一次 ListModels / BenefitTier</span>
+          </div>
+        </div>
         </div>
 
         <div class="card">
@@ -306,7 +328,7 @@
       <div class="models-grid">
       <div class="card">
         <strong>模型清单</strong>
-        <p class="hint">本部署只提供 Gemini 网页版通道的 5 个模型（<code>web-gemini-4-*</code>）。模型名在 <code>/v1/models</code> 里带 <code>metadata.available</code>。</p>
+        <p class="hint">Gemini 网页版固定 5 个 <code>web-gemini-4-*</code>；导入 AI Studio Cookie 后，这里还会出现该账号真实可用的 <code>studio-*</code> 模型。</p>
         <div id="modelsTableWrap"><div class="empty">加载中…</div></div>
       </div>
       <div class="card">
@@ -524,6 +546,7 @@
 
   const CRED_GROUPS = [
     { id: "robin", title: "Gemini 网页版 Cookie", note: "浏览器 Cookie 直连，驱动 web-* 模型。" },
+    { id: "aistudio", title: "AI Studio Cookie", note: "MakerSuite RPC + 服务端 WAA 签名，驱动 studio-* 模型。" },
   ];
 
   function tierBadge(cred) {
@@ -557,7 +580,7 @@
         <div><strong>${esc(cred.label || cred.email || cred.id)}</strong></div>
         <div class="small muted">${esc(cred.email || "")}</div>
       </td>
-      <td data-label="类型"><span class="badge robin">${cred.hasWebCookie ? "cookie" : esc(cred.type)}</span></td>
+      <td data-label="类型"><span class="badge robin">${cred.group === "aistudio" ? "AI Studio" : cred.hasWebCookie ? "cookie" : esc(cred.type)}</span></td>
       <td data-label="状态"><span class="badge ${statusClass}">${statusText}</span></td>
       <td data-label="档位" class="small">${tierBadge(cred)}</td>
       <td data-label="额度" class="small">${quotaCell(cred.usage)}</td>
@@ -582,12 +605,12 @@
   function renderCredentials(creds) {
     const wrap = $("credsTableWrap");
     if (!creds.length) {
-      wrap.innerHTML = '<div class="empty">还没有凭证。在上方粘贴 Gemini 网页版 Cookie 导入。</div>';
+      wrap.innerHTML = '<div class="empty">还没有凭证。在上方粘贴 Gemini 网页版或 AI Studio 的 Cookie 导入。</div>';
       return;
     }
-    const byGroup = { robin: [] };
+    const byGroup = { robin: [], aistudio: [] };
     for (const cred of creds) {
-      const group = "robin";
+      const group = cred.group === "aistudio" ? "aistudio" : "robin";
       byGroup[group].push(cred);
     }
     wrap.innerHTML = CRED_GROUPS.map((group) => {
@@ -736,13 +759,14 @@
       return `<tr>
         <td data-label="模型" class="mono">${esc(model.id)}</td>
         <td data-label="名称" class="small">${esc(model.display_name || "")}</td>
+        <td data-label="通道" class="small muted">${esc((model.groups || []).includes("aistudio") ? "AI Studio" : "web")}</td>
         <td data-label="官方档位" class="small muted">${esc(meta.required_tier || "—")}</td>
         <td data-label="状态" class="small">${state}</td>
         <td data-label="模式" class="small muted">${esc(String(meta.mode ?? "—"))}</td>
         <td data-label="延迟" class="small muted">${meta.latency_ms != null ? meta.latency_ms + " ms" : "—"}</td>
       </tr>`;
     }).join("");
-    wrap.innerHTML = `<table class="cards"><thead><tr><th>模型</th><th>名称</th><th>官方档位</th><th>状态</th><th>模式</th><th>延迟</th></tr></thead><tbody>${rows}</tbody></table>`;
+    wrap.innerHTML = `<table class="cards"><thead><tr><th>模型</th><th>名称</th><th>通道</th><th>官方档位</th><th>状态</th><th>模式</th><th>延迟</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
   async function changePassword() {
@@ -968,6 +992,32 @@
       });
       $("webCookieInput").value = "";
       toast(`Cookie 有效（${result.probe.cookies} 项），web-* 模型已可用`);
+      await loadOverview();
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "验证并导入";
+    }
+  });
+
+  $("importAiStudioBtn").addEventListener("click", async () => {
+    const cookie = $("aiStudioCookie").value.trim();
+    if (!cookie) return toast("先粘贴 aistudio.google.com 的 Cookie", true);
+    const btn = $("importAiStudioBtn");
+    btn.disabled = true;
+    btn.textContent = "验证中…";
+    try {
+      const result = await api("/admin/api/credentials/import-aistudio", {
+        method: "POST",
+        body: JSON.stringify({
+          email: $("aiStudioEmail").value.trim(),
+          cookie,
+          label: $("aiStudioLabel").value.trim(),
+        }),
+      });
+      $("aiStudioCookie").value = "";
+      toast(`AI Studio 有效：${result.account.tier}，${result.account.models.length} 个模型可用`);
       await loadOverview();
     } catch (error) {
       toast(error.message, true);

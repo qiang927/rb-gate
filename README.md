@@ -130,11 +130,28 @@ https://<service-name>.onrender.com
 
 旧 ID（`web-gemini-3.7-flash` 等）已删除，用旧名会 404。
 
+### AI Studio 通道（`studio-*`）
+
+再导入一条 **`aistudio.google.com`** 的 Cookie（同一张面板、邮箱可选），`/v1/models` 会额外列出该账号在 AI Studio 里真实可用的模型：
+
+| 模型 ID（示例） | 上游 | 最低档位 |
+|---|---|---|
+| `studio-gemini-4-neon` | `models/gemini-4-neon` | Pro |
+| `studio-gemini-4-carbon` | `models/gemini-4-carbon` | Ultra |
+| `studio-gemini-4-hydrogen` | `models/gemini-4-hydrogen` | Free |
+| `studio-gemini-3.6-flash` | `models/gemini-3.6-flash` | Free |
+| `studio-gemini-3.1-pro-preview` | `models/gemini-3.1-pro-preview` | Pro |
+
+- 导入时服务端会调 `ListModels` + `GetAiStudioBenefitTier` 校验 Cookie，并读取账号档位（Free/Pro/Ultra）；模型清单以该账号的实际目录为准，不是写死的。
+- 上游是 AI Studio 的 MakerSuite 私有 RPC，需要容器里的 WAA（BotGuard）签名器：Docker 镜像自动带上（`WAA_SIGNER_PATH`），本地跑要指向 `waa-signer` 二进制。
+- 网页版与 AI Studio 的档位/额度互不相干；4 Argon 这类付费模型仍可能返回 `503 high demand`，以 AI Studio 页面为准。
+
 ---
 
 ## 特性
 
 - **OpenAI 兼容**：`POST /v1/chat/completions`（流式/非流式）、`GET /v1/models`；支持 system、多轮、`stream_options.include_usage`。
+- **两条通道**：Gemini 网页版（`web-*`，Cookie 直连）+ AI Studio（`studio-*`，邮箱 + Cookie + 服务端 WAA 签名）。
 - **多凭证轮换**：Cookie 导入前验证；按最久未用优先；失败自动冷却并换号。
 - **动态模型探测**：确认此刻哪个档位真正可用。
 - **档位 / 额度自动检测**：Pro / Ultra / Plus / Free、5h 与 7d 剩余额度、模型所需档位；额度耗尽的账号自动跳过。
@@ -159,6 +176,9 @@ https://<service-name>.onrender.com
 | `CF_KV_BASE_URL` | 否 | `https://api.cloudflare.com` | 调试用 |
 | `WEB_PROXY` | 否 | — | 单代理（`http://host:port`），优先于 `/sorry` 兜底 |
 | `MIHOMO_PATH` | 否 | `/usr/local/bin/mihomo` | 代理池内核 |
+| `WAA_SIGNER_PATH` | 否 | 镜像内 `/usr/local/bin/waa-signer` | AI Studio 通道的 WAA 签名器 |
+| `WAA_DISABLED` | 否 | — | `1` 关闭 AI Studio 通道 |
+| `AI_STUDIO_TIER` | 否 | `TIER1` | 未检测到档位时使用的 G1 头（Pro=TIER1, Ultra=TIER2, Plus=TIER0） |
 | `PROXY_PORT` | 否 | `7891` | 本地 mixed 端口 |
 | `PROXY_CONTROLLER_PORT` | 否 | `9090` | 仅监听 127.0.0.1 |
 | `AUTO_FASTEST` | 否 | 开 | `0` 关闭自动切最快节点 |

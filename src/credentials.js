@@ -11,6 +11,7 @@ import {
 } from "./google.js";
 import { store } from "./store.js";
 import { parseCookieJar, probeWebCookie } from "./googleweb.js";
+import { fetchAiStudioAccount, prepareCookies } from "./aistudio.js";
 
 const TOKEN_SKEW_MS = 5 * 60 * 1000;
 
@@ -76,6 +77,28 @@ async function resolveProjectForToken(accessToken, cred) {
 export async function testCredential(id) {
   const cred = store.rawCredential(id);
   if (!cred) throw fail("credential not found");
+  if (cred.type === "aistudio") {
+    const cookie = decryptString(cred.cookieEnc, config.dataDir);
+    const account = await fetchAiStudioAccount({ cookie });
+    if (!account.ok) {
+      store.markError(id, account.error);
+      throw new UpstreamError(account.error, { status: 400, code: "cookie_rejected" });
+    }
+    store.saveCredential({
+      ...cred,
+      tier: account.tier,
+      tierLabel: account.tierLabel,
+      benefit: account.benefit,
+      models: account.models,
+      lastError: null,
+    });
+    store.markOk(id);
+    return {
+      ok: true,
+      credential: store.getCredential(id),
+      probe: { tier: account.tierLabel || "Free", models: account.models.length },
+    };
+  }
   if (!cred.webCookieEnc) {
     throw new UpstreamError("这条凭证没有 Gemini 网页版 Cookie，请重新导入", { status: 400, code: "no_cookie" });
   }
@@ -120,4 +143,44 @@ export async function importWebCookie({ email = "", cookie, label = "" }) {
     lastError: null,
   });
   return { ok: true, credential, probe: { status: probe.status, cookies: probe.cookieCount } };
+}
+
+/**
+ * Import an AI Studio session (email + aistudio.google.com cookie). The cookie
+ * is validated against ListModels/GetAiStudioBenefitTier before it is stored;
+ * the returned catalog is what `/v1/models` advertises for this account.
+ */
+export async function importAistudio({ email = "", cookie, label = "" }) {
+  const raw = String(cookie || "").trim();
+  if (!raw) throw new UpstreamError("缺少 Cookie 内容", { status: 400, code: "empty_cookie" });
+  const prepared = prepareCookies(raw);
+  if (!prepared.ok) {
+    throw new UpstreamError(
+      `Cookie 缺少必要字段（${prepared.missing.join(", ")}）：请从已登录的 aistudio.google.com 复制完整 Cookie`,
+      { status: 400, code: "cookie_incomplete" },
+    );
+  }
+  const account = await fetchAiStudioAccount({ cookie: prepared.header });
+  if (!account.ok) {
+    throw new UpstreamError(account.error || "AI Studio Cookie 校验失败", { status: 400, code: "cookie_rejected" });
+  }
+  const credential = store.upsertCredential({
+    type: "aistudio",
+    group: "aistudio",
+    email,
+    label,
+    cookie: prepared.header,
+    tier: account.tier,
+    tierLabel: account.tierLabel,
+    benefit: account.benefit,
+    models: account.models,
+    projectId: "aistudio",
+    status: "active",
+    lastError: null,
+  });
+  return {
+    ok: true,
+    credential,
+    account: { tier: account.tierLabel || "Free", models: account.models },
+  };
 }

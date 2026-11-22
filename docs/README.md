@@ -4,20 +4,25 @@
 
 ## 这个项目是什么
 
-把你**自己 Google 账号的 Gemini 网页版对话**，包装成本地/云端一个 **OpenAI 兼容 API**，让你可以在任意 OpenAI 客户端里用 Gemini 4 Hydrogen / Neon / Carbon 等档位。
+把你**自己 Google 账号的 Gemini 网页版（以及 AI Studio）对话**，包装成本地/云端一个 **OpenAI 兼容 API**，让你可以在任意 OpenAI 客户端里用 Gemini 4 Hydrogen / Neon / Carbon 等档位。
+
+两条通道：
+
+- **Gemini 网页版**（`web-*`）：浏览器 Cookie 直连 `gemini.google.com`，对话会进你自己的 Gemini 网页/客户端；
+- **AI Studio**（`studio-*`）：`aistudio.google.com` 的 Cookie + 服务端 WAA 签名器，走 MakerSuite 私有 RPC，模型清单由账号实际权限决定。
 
 它**不是**：
 
 - ❌ 官方 Gemini API 的转发（那条路要付费 key）；
 - ❌ 多人共享的公共池（只服务你自己导入的账号）；
-- ❌ 支持图片输入 / 函数调用 / JSON mode 的完整 API（网页版本身不支持）。
+- ❌ 支持图片输入 / 函数调用 / JSON mode 的完整 API（这两条通道本身不支持）。
 
 ## 五分钟路线图
 
 ```
 Fork 仓库 → 建 Cloudflare KV（可选） → Render 建 Web Service（Docker）
    → 拿到 https://<服务名>.onrender.com 地址
-   → /admin/ 登录 → 导入 Gemini Cookie → 建 API Key
+   → /admin/ 登录 → 导入 Gemini / AI Studio Cookie → 建 API Key
    → 客户端填 Base URL + Key + 模型名 → 完成
 ```
 
@@ -27,7 +32,7 @@ Fork 仓库 → 建 Cloudflare KV（可选） → Render 建 Web Service（Docke
 |---|---|
 | [01-原理.md](./01-原理.md) | 想知道它到底怎么把「网页对话」变成 API 的；想改代码/排障 |
 | [02-部署.md](./02-部署.md) | 第一次部署，或重新部署；**关于网址的疑问也在这里** |
-| [03-使用.md](./03-使用.md) | 部署完成后：取 Cookie、建 Key、接各种客户端、开代理池 |
+| [03-使用.md](./03-使用.md) | 部署完成后：取两种 Cookie、建 Key、接各种客户端、开代理池 |
 | [04-常见问题.md](./04-常见问题.md) | 遇到报错先查这里（Q1–Q22） |
 
 ## 快速开始（极简版）

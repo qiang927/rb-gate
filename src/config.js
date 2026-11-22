@@ -14,10 +14,12 @@ function int(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+const dataDir = path.resolve(process.env.DATA_DIR || path.join(ROOT_DIR, "data"));
+
 export const config = {
   port: int(process.env.PORT, 8787),
   host: process.env.HOST || "0.0.0.0",
-  dataDir: path.resolve(process.env.DATA_DIR || path.join(ROOT_DIR, "data")),
+  dataDir,
   publicDir: path.join(ROOT_DIR, "public"),
 
   // Admin console password. Empty => generated on first boot into data/admin.json.
@@ -64,6 +66,17 @@ export const config = {
   webProxy: (process.env.WEB_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "").trim(),
   // Bundled mihomo (Clash Meta) core used by the proxy pool.
   mihomoPath: process.env.MIHOMO_PATH || "/usr/local/bin/mihomo",
+  // AI Studio channel: native WAA (BotGuard) signer, shipped in the image.
+  waa: {
+    enabled: !bool(process.env.WAA_DISABLED),
+    signerPath: process.env.WAA_SIGNER_PATH || path.join(ROOT_DIR, "waa-signer/bin/waa-signer"),
+    stateDir: path.join(dataDir, "waa"),
+    proxy: (process.env.WAA_PROXY || "").trim(),
+    readyTimeoutMs: int(process.env.WAA_READY_TIMEOUT_MS, 45_000),
+    mintTimeoutMs: int(process.env.WAA_MINT_TIMEOUT_MS, 120_000),
+    defaultTier: (process.env.AI_STUDIO_TIER || "TIER1").trim(),
+  },
+
   autoFastest: process.env.AUTO_FASTEST !== "0",
   autoFastestMs: Math.max(60_000, Number(process.env.AUTO_FASTEST_MS) || 600_000),
   proxyPort: int(process.env.PROXY_PORT, 7891),

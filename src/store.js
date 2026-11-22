@@ -35,10 +35,11 @@ function writeJsonAtomic(file, value) {
   fs.renameSync(tmp, file);
 }
 
-/** Every credential belongs to the robin channel (oauth_token -> master token). */
+/** Credential channel: `robin` = Gemini web cookie, `aistudio` = AI Studio cookie. */
 export function credentialGroup(cred) {
   if (!cred) return "";
   if (cred.group) return cred.group;
+  if (cred.type === "aistudio") return "aistudio";
   return "robin";
 }
 
@@ -53,10 +54,12 @@ function sanitizeCredential(cred, { reveal = false } = {}) {
   copy.group = credentialGroup(cred);
   copy.hasMasterToken = Boolean(cred.masterTokenEnc);
   copy.hasWebCookie = Boolean(cred.webCookieEnc);
+  copy.hasCookie = Boolean(cred.cookieEnc);
   if (reveal) {
     if (cred.masterTokenEnc) copy.masterToken = decryptString(cred.masterTokenEnc, config.dataDir);
     if (cred.refreshTokenEnc) copy.refreshToken = decryptString(cred.refreshTokenEnc, config.dataDir);
     if (cred.webCookieEnc) copy.webCookie = decryptString(cred.webCookieEnc, config.dataDir);
+    if (cred.cookieEnc) copy.cookie = decryptString(cred.cookieEnc, config.dataDir);
   }
   return copy;
 }
@@ -384,9 +387,15 @@ class Store {
       // Secrets are only rewritten when explicitly supplied.
       masterTokenEnc: input.masterToken ? encryptString(input.masterToken, config.dataDir) : existing?.masterTokenEnc || "",
       webCookieEnc: input.webCookie ? encryptString(input.webCookie, config.dataDir) : existing?.webCookieEnc || "",
+      cookieEnc: input.cookie ? encryptString(input.cookie, config.dataDir) : existing?.cookieEnc || "",
+      models: input.models ?? existing?.models ?? [],
+      benefit: input.benefit ?? existing?.benefit ?? null,
     };
     if (cred.type === "robin" && !cred.masterTokenEnc && !cred.webCookieEnc) {
       throw new Error("robin credential requires a master token or an oauth_token to exchange");
+    }
+    if (cred.type === "aistudio" && !cred.cookieEnc) {
+      throw new Error("AI Studio credential requires a browser cookie");
     }
     this.saveCredential(cred);
     return sanitizeCredential(cred);
