@@ -76,6 +76,28 @@ Cookie 常见有效期几小时到几天；失效后重新粘贴。退出登录 
 
 免费层每天 1000 次写、10 万次读；用量统计按 5 分钟合并写。`ENCRYPTION_KEY` 必须固定，否则重启后 KV 里的密文解不开。
 
+## 代理池（Clash 订阅）
+
+Google 有时会把机房 IP（Render 等）判成「异常流量」，`gemini.google.com` 直接 302 到 `www.google.com/sorry/index`。
+面板「设置 → 代理池」可以导入一条 **Clash 订阅 URL**，网关会：
+
+1. 下载订阅、解析 `proxies:` 列表；
+2. 用内置的 mihomo（Clash Meta）内核在服务端拉起本地代理 `127.0.0.1:7891`；
+3. 所有 Gemini 网页版请求走这个本地代理，按订阅节点出站；
+4. 命中 `/sorry` 验证页时自动切到下一个节点重试（SSE 流式也一样）；
+5. 节点可手动切换，状态与当前节点在面板里可见，订阅 URL 会持久化（KV 模式同样生效）。
+
+环境变量：
+
+| 变量 | 说明 |
+|---|---|
+| `MIHOMO_PATH` | mihomo 二进制路径，默认 `/usr/local/bin/mihomo`（Docker 镜像自带） |
+| `PROXY_PORT` | 本地 mixed 端口，默认 `7891` |
+| `PROXY_CONTROLLER_PORT` | mihomo 控制端口，默认 `9090`（仅监听 127.0.0.1） |
+| `WEB_PROXY` | 不想用订阅时，可直接指定一个 HTTP 代理（`http://user:pass@host:port`） |
+
+订阅需要是 **Clash 格式**（含 `proxies:` 的 YAML）。机场常见的 ss / vmess / trojan / hysteria2 节点都由 mihomo 支持；纯 base64 的 v2ray 订阅会被自动解码一次。
+
 ## 客户端接入
 
 ```bash
