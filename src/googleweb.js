@@ -2,6 +2,7 @@ import https from "node:https";
 import crypto from "node:crypto";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { config } from "./config.js";
+import { getOutboundProxy } from "./proxyroute.js";
 import { mintBearer } from "./gpsoauth.js";
 
 const OAUTH_LOGIN_SERVICE = "https://www.google.com/accounts/OAuthLogin";
@@ -43,14 +44,13 @@ export class WebError extends Error {
   }
 }
 
-let proxyAgent = null;
+const proxyAgents = new Map();
 function outboundAgent() {
-  if (!config.webProxy) return undefined;
-  if (!proxyAgent) {
-    const target = /^[a-z]+:\/\//i.test(config.webProxy) ? config.webProxy : `http://${config.webProxy}`;
-    proxyAgent = new HttpsProxyAgent(target);
-  }
-  return proxyAgent;
+  const source = getOutboundProxy() || config.webProxy;
+  if (!source) return undefined;
+  const target = /^[a-z]+:\/\//i.test(source) ? source : `http://${source}`;
+  if (!proxyAgents.has(target)) proxyAgents.set(target, new HttpsProxyAgent(target));
+  return proxyAgents.get(target);
 }
 
 function request(url, { method = "GET", headers = {}, body = null, timeoutMs = 60000 } = {}) {
