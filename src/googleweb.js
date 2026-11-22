@@ -192,6 +192,99 @@ export async function probeWebCookie(rawCookie) {
   };
 }
 
+const USAGE_URL = "https://gemini.google.com/_/BardChatUi/graphql/schemas/GEMINI_WEB_GRAPHQL/executeQuery";
+// Query signature of the public UsagePageSurface bundle (same query the
+// gemini.google.com/usage page runs). Kept as a constant; update if it rotates.
+const USAGE_SIGNATURE = "2/dWbCvkVB0X16r9NPnxifeOAAqdCqMf0xeWvau9yPy7g=";
+const USAGE_VARIABLES = JSON.stringify({
+  g1Request: { entrypoints: ["GEMINI_USAGE_SETTINGS_UPGRADE_BANNER"] },
+  workspaceRequest: { recommendationsForSurfaceRequests: [] },
+});
+
+export const TIER_LABELS = { TIER0: "Plus", TIER1: "Pro", TIER2: "Ultra" };
+
+// What the official Gemini app unlocks at each tier (UI gating). The web
+// endpoint does not always enforce this server-side, so treat it as a hint and
+// rely on the live per-model probe for actual availability.
+export const MODEL_TIER_REQUIREMENTS = {
+  "web-gemini-4-hydrogen": "Free",
+  "web-gemini-4-neon": "Pro",
+  "web-gemini-4-carbon": "Ultra",
+  "web-gemini-4-auto": "Free",
+  "web-gemini-4-flash-lite": "Free",
+};
+
+export function requiredTierForModel(id) {
+  return MODEL_TIER_REQUIREMENTS[id] || null;
+}
+
+export function tierLabel(raw) {
+  if (!raw) return "Free";
+  return TIER_LABELS[raw] || raw;
+}
+
+export function parseUsageBody(raw) {
+  const text = String(raw || "").trim().replace(/^\)\]\}'\s*/, "");
+  if (!text) return null;
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const list = Array.isArray(payload) ? payload : [payload];
+  const viewer = list.map((item) => item?.data?.viewer).find((item) => item && typeof item === "object");
+  const info = viewer?.rpcs?.getUsageInfo;
+  if (!info || !Array.isArray(info.pools)) return null;
+  const readWindow = (poolType, windowMinutes) => {
+    const pool = info.pools.find((item) => item && item.poolType === poolType);
+    if (!pool || pool.percentageUsed === null || pool.percentageUsed === undefined) return null;
+    const used = Number(pool.percentageUsed);
+    if (!Number.isFinite(used) || used < 0) return null;
+    const usedPercent = Math.max(0, Math.min(100, used * 100));
+    const resetsAt = /^\d{4}-\d{2}-\d{2}T/.test(String(pool?.gxu?.windowRefreshesAt || ""))
+      ? pool.gxu.windowRefreshesAt
+      : null;
+    return {
+      usedPercent: Math.round(usedPercent * 10) / 10,
+      remainingPercent: Math.round((100 - usedPercent) * 10) / 10,
+      windowMinutes,
+      resetsAt,
+    };
+  };
+  const tierRaw = typeof info.subscriptionTier === "string" ? info.subscriptionTier : "";
+  return {
+    tier: { raw: tierRaw, label: tierLabel(tierRaw) },
+    fiveHour: readWindow("GXU_FIVE_HOURLY", 300),
+    weekly: readWindow("GXU_WEEKLY", 10080),
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+export async function fetchWebUsage(session) {
+  await session.ensureCookies();
+  const cookie = session.cookies.join("; ");
+  const url =
+    `${USAGE_URL}?query_signature=${encodeURIComponent(USAGE_SIGNATURE)}` +
+    `&variables=${encodeURIComponent(USAGE_VARIABLES)}`;
+  const res = await request(url, {
+    headers: { cookie, accept: "application/json", referer: "https://gemini.google.com/usage" },
+    timeoutMs: 30000,
+  });
+  if (res.status === 401 || res.status === 403) {
+    throw new WebError(`usage request rejected (${res.status})`, { status: 401, code: "session_expired", retryable: true });
+  }
+  if (res.status === 429) {
+    throw new WebError("usage request rate limited (429)", { status: 429, code: "usage_rate_limited", retryable: true });
+  }
+  if (res.status !== 200 || res.body.trimStart().startsWith("<")) {
+    throw new WebError(`usage request failed (${res.status})`, { status: 502, code: "usage_failed", retryable: true });
+  }
+  const usage = parseUsageBody(res.body);
+  if (!usage) throw new WebError("usage response changed", { status: 502, code: "usage_parse_failed" });
+  return usage;
+}
+
 export class GoogleWebSession {
   constructor({ email, masterToken, androidId, app = DEFAULT_WEB_APP, clientSig = DEFAULT_WEB_SIG, cookie = "" }) {
     this.email = email;
