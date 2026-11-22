@@ -28,16 +28,25 @@ function subscriptionUrl(input) {
 }
 
 async function fetchText(url) {
-  const res = await fetch(url, {
-    headers: {
-      "user-agent": "clash.meta/1.19 mihomo",
-      accept: "*/*",
-    },
-    redirect: "follow",
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!res.ok) throw new Error(`订阅下载失败：HTTP ${res.status}`);
-  return await res.text();
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const res = await fetch(url, {
+        headers: {
+          "user-agent": "clash.meta/1.19 mihomo",
+          accept: "*/*",
+        },
+        redirect: "follow",
+        signal: AbortSignal.timeout(90_000),
+      });
+      if (!res.ok) throw new Error(`订阅下载失败：HTTP ${res.status}`);
+      return await res.text();
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+  }
+  throw lastError;
 }
 
 export function parseClashConfig(text) {
@@ -152,7 +161,7 @@ class ProxyPool {
     });
   }
 
-  async waitReady(timeoutMs = 20_000) {
+  async waitReady(timeoutMs = 60_000) {
     const deadline = Date.now() + timeoutMs;
     let lastError = null;
     while (Date.now() < deadline) {
@@ -297,9 +306,15 @@ export function isAbuseBlock(error) {
 export async function initProxyPool() {
   const url = store.settings()?.proxySubscription || "";
   if (!url) return;
-  try {
-    await proxyPool.start(url);
-  } catch (error) {
-    logWarn(`proxy pool failed to start: ${error.message}`);
+  // Give the instance a moment (slow cold start) and retry once on failure.
+  await new Promise((resolve) => setTimeout(resolve, 3_000));
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await proxyPool.start(url);
+      return;
+    } catch (error) {
+      logWarn(`proxy pool failed to start (attempt ${attempt + 1}): ${error.message}`);
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+    }
   }
 }
