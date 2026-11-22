@@ -290,6 +290,22 @@
       </div>
 
       <div class="card" style="margin-top:14px">
+        <strong>代理池（Clash 订阅）</strong>
+        <p class="hint" style="margin-top:6px">
+          Google 对机房 IP 弹「异常流量」验证时，导入 Clash 订阅 URL：内置 mihomo 内核会在服务端拉起多节点代理，命中验证页自动换节点重试。
+        </p>
+        <div class="field"><label>订阅 URL（Clash 格式，可含 token）</label><input id="proxyUrl" placeholder="https://example.com/api/v1/client/subscribe?token=..." /></div>
+        <div class="row" style="margin-top:10px">
+          <button class="primary" id="proxyImportBtn">导入并启动</button>
+          <button id="proxyRotateBtn">换节点</button>
+          <button id="proxyStopBtn">停止</button>
+          <button id="proxyRefreshBtn">刷新</button>
+        </div>
+        <div id="proxyStatus" class="hint" style="margin-top:10px">未启动。</div>
+        <div id="proxyNodes" class="grid cols-2" style="margin-top:10px"></div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
         <strong>管理员密码</strong>
         <p class="hint" style="margin-top:6px" id="passwordHint">登录后可以随时修改密码（至少 8 位）。</p>
         <div class="grid cols-2" style="margin-top:10px">
@@ -409,6 +425,7 @@
     $("logoutBtn").classList.remove("hidden");
     $("baseUrl").textContent = location.origin + "/v1";
     await loadOverview();
+    await loadProxy();
     startLogPolling();
   }
 
@@ -596,6 +613,34 @@
     }
   }
 
+  async function loadProxy() {
+    try {
+      const data = await api("/admin/api/proxy");
+      renderProxy(data.proxy || {});
+    } catch (error) {
+      $("proxyStatus").textContent = `加载代理状态失败：${error.message}`;
+    }
+  }
+
+  function renderProxy(proxy) {
+    const status = $("proxyStatus");
+    if (proxy.running) {
+      status.textContent = `运行中 · ${proxy.nodes.length} 个节点 · 当前：${proxy.current || "-"} · 订阅：${proxy.subscriptionHost || "-"}`;
+    } else {
+      status.textContent = proxy.error ? `未运行（${proxy.error}）` : "未启动。";
+    }
+    const box = $("proxyNodes");
+    if (!proxy.running || !proxy.nodes?.length) {
+      box.innerHTML = "";
+      return;
+    }
+    box.innerHTML = proxy.nodes.map((name) => `
+      <div class="row" style="justify-content:space-between;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px 10px">
+        <span class="mono small" style="word-break:break-all">${esc(name)}${name === proxy.current ? " · 当前" : ""}</span>
+        <button data-proxy-node="${esc(name)}">使用</button>
+      </div>`).join("");
+  }
+
   function renderSettings(settings) {
     const entries = Object.entries(settings);
     $("settingsBox").innerHTML = entries.map(([key, value]) => `
@@ -625,6 +670,54 @@
     showLogin();
   });
   $("changePwdBtn").addEventListener("click", changePassword);
+
+  $("proxyImportBtn").addEventListener("click", async () => {
+    const url = $("proxyUrl").value.trim();
+    if (!url) return toast("先填 Clash 订阅 URL", true);
+    const btn = $("proxyImportBtn");
+    btn.disabled = true;
+    btn.textContent = "导入中…";
+    try {
+      const result = await api("/admin/api/proxy/import", { method: "POST", body: JSON.stringify({ url }) });
+      renderProxy(result.proxy || {});
+      toast(`代理池已启动：${result.proxy?.nodes?.length || 0} 个节点`);
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "导入并启动";
+    }
+  });
+  $("proxyRotateBtn").addEventListener("click", async () => {
+    try {
+      const result = await api("/admin/api/proxy/rotate", { method: "POST", body: "{}" });
+      renderProxy(result.proxy || {});
+      toast(result.node ? `已切换到 ${result.node}` : "没有更多节点");
+    } catch (error) {
+      toast(error.message, true);
+    }
+  });
+  $("proxyStopBtn").addEventListener("click", async () => {
+    try {
+      const result = await api("/admin/api/proxy/stop", { method: "POST", body: "{}" });
+      renderProxy(result.proxy || {});
+      toast("代理池已停止");
+    } catch (error) {
+      toast(error.message, true);
+    }
+  });
+  $("proxyRefreshBtn").addEventListener("click", loadProxy);
+  $("proxyNodes").addEventListener("click", async (event) => {
+    const btn = event.target.closest("[data-proxy-node]");
+    if (!btn) return;
+    try {
+      const result = await api("/admin/api/proxy/select", { method: "POST", body: JSON.stringify({ name: btn.dataset.proxyNode }) });
+      renderProxy(result.proxy || {});
+      toast("已切换节点");
+    } catch (error) {
+      toast(error.message, true);
+    }
+  });
 
   $("importWebCookieBtn").addEventListener("click", async () => {
     const cookie = $("webCookieInput").value.trim();
