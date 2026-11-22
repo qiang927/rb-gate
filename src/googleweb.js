@@ -282,6 +282,16 @@ export async function fetchWebUsage(session) {
   }
   const usage = parseUsageBody(res.body);
   if (!usage) throw new WebError("usage response changed", { status: 502, code: "usage_parse_failed" });
+  // Account fingerprint from the identity cookies: helps spot two credentials that share one session.
+  const jar = new Map();
+  for (const item of session.cookies) {
+    const at = item.indexOf("=");
+    if (at > 0) jar.set(item.slice(0, at).trim(), item.slice(at + 1).trim());
+  }
+  const identity = ["SID", "__Secure-1PSID", "__Secure-3PSID", "SAPISID", "APISID"]
+    .map((name) => `${name}=${jar.get(name) || ""}`)
+    .join("|");
+  usage.accountFingerprint = crypto.createHash("sha256").update(identity).digest("hex").slice(0, 10);
   return usage;
 }
 
