@@ -60,6 +60,8 @@ export const config = {
     process.env.USER_AGENT ||
     "antigravity/hub/2.33.0 (aidev_client; os_type=darwin; arch=arm64; cl=1023160026)",
   logRequests: bool(process.env.LOG_REQUESTS, false),
+  // Optional outbound HTTP proxy for the Gemini web channel (host:port or a full URL).
+  webProxy: (process.env.WEB_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "").trim(),
 
   // Optional Cloudflare KV backing store: keeps credentials across restarts
   // when the host has no persistent disk (Render free tier and friends).
