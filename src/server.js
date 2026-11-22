@@ -4,7 +4,7 @@ import express from "express";
 import { config, ensureConfigWarnings } from "./config.js";
 import { importWebCookie, testCredential } from "./credentials.js";
 import { UpstreamError } from "./google.js";
-import { GoogleWebSession, WEB_MODELS, isWebModel, probeWebCookie, probeWebModels } from "./googleweb.js";
+import { GoogleWebSession, WEB_MODELS, fetchWebUsage, isWebModel, probeWebCookie, probeWebModels, requiredTierForModel } from "./googleweb.js";
 import { decryptString } from "./crypto.js";
 import { openStream, withCredential } from "./router.js";
 import { store } from "./store.js";
@@ -137,6 +137,7 @@ function webModelEntries() {
       groups: ["robin"],
       metadata: {
         mode: cfg.mode,
+        required_tier: requiredTierForModel(id),
         available: hit ? hit.ok : null,
         latency_ms: hit ? hit.ms : null,
         checked_at: webModelsCache ? webModelsCache.checkedAt : null,
@@ -297,14 +298,63 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
 
 const webSessions = new Map();
 
+function usageExhausted(usage) {
+  if (!usage) return false;
+  const now = Date.now();
+  for (const window of [usage.fiveHour, usage.weekly]) {
+    if (!window || typeof window.remainingPercent !== "number") continue;
+    if (window.remainingPercent > 0.5) continue;
+    const reset = window.resetsAt ? Date.parse(window.resetsAt) : NaN;
+    if (!Number.isFinite(reset) || reset > now) return true;
+  }
+  return false;
+}
+
 function findWebCredential() {
   const creds = store.credentials().filter((cred) => cred.webCookieEnc || cred.masterTokenEnc || cred.cookieEnc);
   if (!creds.length) return null;
   const pool = creds.filter((cred) => cred.status !== "disabled");
   const usable = pool.length ? pool : creds;
+  // Prefer credentials that still have quota left; fall back to all when every
+  // one is exhausted (the upstream may still allow a little overage).
+  const withQuota = usable.filter((cred) => !usageExhausted(cred.usage));
+  const candidates = withQuota.length ? withQuota : usable;
   // Least-recently used first, so multiple robin credentials rotate.
-  usable.sort((a, b) => String(a.lastUsedAt || "").localeCompare(String(b.lastUsedAt || "")));
-  return usable[0];
+  candidates.sort((a, b) => String(a.lastUsedAt || "").localeCompare(String(b.lastUsedAt || "")));
+  return candidates[0];
+}
+
+const usageRefreshing = new Set();
+async function refreshCredentialUsage(cred, { force = false } = {}) {
+  if (!cred?.webCookieEnc && !cred?.cookieEnc) {
+    const error = new Error("credential has no Gemini web cookie");
+    error.code = "no_cookie";
+    error.status = 400;
+    throw error;
+  }
+  if (!force && cred.usageAt && Date.now() - Date.parse(cred.usageAt) < 5 * 60 * 1000) {
+    return cred.usage || null;
+  }
+  if (usageRefreshing.has(cred.id)) return cred.usage || null;
+  usageRefreshing.add(cred.id);
+  try {
+    const usage = await fetchWebUsage(webSessionFor(cred));
+    store.setCredentialUsage(cred.id, usage);
+    logInfo(
+      `usage: ${cred.email || cred.id} tier=${usage.tier.label} ` +
+      `5h=${usage.fiveHour ? usage.fiveHour.remainingPercent + "%" : "?"} ` +
+      `7d=${usage.weekly ? usage.weekly.remainingPercent + "%" : "?"}`,
+    );
+    return usage;
+  } finally {
+    usageRefreshing.delete(cred.id);
+  }
+}
+
+function scheduleUsageRefresh(cred) {
+  const stale = !cred?.usageAt || Date.now() - Date.parse(cred.usageAt) > 10 * 60 * 1000;
+  if (!stale) return;
+  refreshCredentialUsage(cred).catch((error) => logWarn(`usage refresh failed: ${error.message}`));
 }
 
 function webSessionFor(cred) {
@@ -377,6 +427,7 @@ async function handleWebChat(req, res, body, model, stream) {
       const text = await withAbuseRetry(() => session.complete(prompt, { model, temporary }));
       store.markUsed(cred.id);
       store.markOk(cred.id);
+      scheduleUsageRefresh(cred);
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       return res.json(buildOpenaiResponse({ text, model, toolCalls: [] }));
     } catch (error) {
@@ -424,6 +475,7 @@ async function handleWebChat(req, res, body, model, stream) {
     }
     store.markUsed(cred.id);
     store.markOk(cred.id);
+    scheduleUsageRefresh(cred);
     send(buildOpenaiChunk({ id, model, created, delta: {}, finishReason: "stop" }));
     if (body.stream_options?.include_usage) {
       send(buildOpenaiChunk({ id, model, created, delta: {}, finishReason: null, usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } }));
@@ -646,8 +698,14 @@ app.get("/admin/api/overview", requireAdmin, (req, res) => {
     disabled: credentials.filter((cred) => cred.status === "disabled").length,
     uses: credentials.reduce((sum, cred) => sum + (cred.uses || 0), 0),
   };
+  const tiers = {};
+  for (const cred of credentials) {
+    const label = cred.tierLabel || (cred.tier ? cred.tier : "未知");
+    tiers[label] = (tiers[label] || 0) + 1;
+  }
   res.json({
     credentials,
+    tiers,
     stats,
     models: [
       ...webModelEntries(),
@@ -674,6 +732,33 @@ app.post("/admin/api/credentials/:id/test", requireAdmin, async (req, res) => {
   } catch (error) {
     logError(`credential test failed: ${req.params.id}: ${error.message}`);
     res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/admin/api/usage", requireAdmin, (req, res) => {
+  const credentials = store.listCredentials().map((cred) => ({
+    id: cred.id,
+    email: cred.email,
+    label: cred.label,
+    tier: cred.tier || "",
+    tierLabel: cred.tierLabel || null,
+    usage: cred.usage || null,
+    usageAt: cred.usageAt || null,
+    exhausted: usageExhausted(cred.usage),
+  }));
+  res.json({ ok: true, credentials });
+});
+
+app.post("/admin/api/credentials/:id/usage", requireAdmin, async (req, res) => {
+  const cred = store.rawCredential(req.params.id);
+  if (!cred) return res.status(404).json({ ok: false, error: "credential not found" });
+  try {
+    const usage = await refreshCredentialUsage(cred, { force: true });
+    res.json({ ok: true, usage });
+  } catch (error) {
+    const status = error.status && error.status < 500 ? error.status : 502;
+    logWarn(`usage fetch failed: ${req.params.id}: ${error.message}`);
+    res.status(status).json({ ok: false, code: error.code || "usage_failed", error: error.message });
   }
 });
 
