@@ -482,7 +482,9 @@ export async function fetchAiStudioAccount({ cookie, signal } = {}) {
   if (!auth) return { ok: false, models: [], error: "Cookie 里没有 SAPISID，无法校验 AI Studio 登录态" };
   const headers = {
     authorization: auth,
-    "content-type": "application/json",
+    // The MakerSuite RPC rejects application/json here; the web client always
+    // sends the JSPB content type, even for account probes.
+    "content-type": "application/json+protobuf",
     "x-user-agent": "grpc-web-javascript/0.1",
     "x-goog-api-key": PUBLIC_WEB_API_KEY,
     origin: AI_STUDIO_ORIGIN,
