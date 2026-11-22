@@ -539,6 +539,7 @@ app.post("/admin/api/proxy/import", requireAdmin, async (req, res) => {
   const url = String(req.body?.url || "").trim();
   if (!url) return res.status(400).json({ ok: false, error: "缺少订阅 URL" });
   try {
+    store.updateSettings({ proxyRemoved: [] });
     const status = await proxyPool.start(url);
     store.updateSettings({ proxySubscription: url });
     logInfo(`proxy pool: imported ${status.nodes.length} nodes`);
@@ -562,6 +563,25 @@ app.post("/admin/api/proxy/rotate", requireAdmin, async (req, res) => {
   try {
     const name = await proxyPool.rotate();
     res.json({ ok: true, node: name, proxy: proxyPool.status() });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/admin/api/proxy/test-all", requireAdmin, async (req, res) => {
+  try {
+    const results = await proxyPool.testAll();
+    res.json({ ok: true, results });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/admin/api/proxy/remove", requireAdmin, async (req, res) => {
+  try {
+    const status = await proxyPool.removeNode(String(req.body?.name || ""));
+    logInfo(`proxy pool: node removed, ${status.nodes.length} left`);
+    res.json({ ok: true, proxy: status });
   } catch (error) {
     res.status(400).json({ ok: false, error: error.message });
   }
