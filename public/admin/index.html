@@ -61,13 +61,11 @@
   .creds-grid { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 16px; align-items: start; }
   @media (min-width: 1181px) {
     #credsTableWrap { overflow-x: auto; }
-    #credsTableWrap table { min-width: 780px; }
-    #credsTableWrap th:last-child, #credsTableWrap td.actions { width: 200px; }
-    #credsTableWrap td.actions { display: flex; flex-wrap: nowrap; gap: 4px; justify-content: flex-end; }
-    #credsTableWrap td.actions .btn { padding: 5px 8px; font-size: 12px; flex: 0 0 auto; white-space: nowrap; }
+    #credsTableWrap table { min-width: 900px; }
     #credsTableWrap th { white-space: nowrap; }
+    #credsTableWrap td.actions { white-space: nowrap; }
+    #credsTableWrap td.actions .btn { padding: 5px 8px; font-size: 12px; }
     @media (max-width: 1400px) { #credsTableWrap .col-error { display: none; } }
-    #credsTableWrap table { min-width: 720px; }
   }
   .import-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
   .models-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px; align-items: start; }
