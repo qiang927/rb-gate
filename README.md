@@ -130,17 +130,17 @@ https://<service-name>.onrender.com
 
 旧 ID（`web-gemini-3.7-flash` 等）已删除，用旧名会 404。
 
-### AI Studio 通道（`studio-*`）
+### AI Studio 通道（`pggo-*`）
 
 再导入一条 **`aistudio.google.com`** 的 Cookie（同一张面板、邮箱可选），`/v1/models` 会额外列出该账号在 AI Studio 里真实可用的模型：
 
 | 模型 ID（示例） | 上游 | 最低档位 |
 |---|---|---|
-| `studio-gemini-4-neon` | `models/gemini-4-neon` | Pro |
-| `studio-gemini-4-carbon` | `models/gemini-4-carbon` | Ultra |
-| `studio-gemini-4-hydrogen` | `models/gemini-4-hydrogen` | Free |
-| `studio-gemini-3.6-flash` | `models/gemini-3.6-flash` | Free |
-| `studio-gemini-3.1-pro-preview` | `models/gemini-3.1-pro-preview` | Pro |
+| `pggo-gemini-4-neon` | `models/gemini-4-neon` | Pro |
+| `pggo-gemini-4-carbon` | `models/gemini-4-carbon` | Ultra |
+| `pggo-gemini-4-hydrogen` | `models/gemini-4-hydrogen` | Free |
+| `pggo-gemini-3.6-flash` | `models/gemini-3.6-flash` | Free |
+| `pggo-gemini-3.1-pro-preview` | `models/gemini-3.1-pro-preview` | Pro |
 
 - 导入时服务端会调 `ListModels` + `GetAiStudioBenefitTier` 校验 Cookie，并读取账号档位（Free/Pro/Ultra）；模型清单以该账号的实际目录为准，不是写死的。
 - 上游是 AI Studio 的 MakerSuite 私有 RPC，需要容器里的 WAA（BotGuard）签名器：Docker 镜像自动带上（`WAA_SIGNER_PATH`），本地跑要指向 `waa-signer` 二进制。
@@ -152,7 +152,7 @@ https://<service-name>.onrender.com
 ## 特性
 
 - **OpenAI 兼容**：`POST /v1/chat/completions`（流式/非流式）、`GET /v1/models`；支持 system、多轮、`stream_options.include_usage`。
-- **两条通道**：Gemini 网页版（`web-*`，Cookie 直连）+ AI Studio（`studio-*`，邮箱 + Cookie + 服务端 WAA 签名）。
+- **两条通道**：Gemini 网页版（`web-*`，Cookie 直连）+ AI Studio（`pggo-*`，邮箱 + Cookie + 服务端 WAA 签名）。
 - **多凭证轮换**：Cookie 导入前验证；按最久未用优先；失败自动冷却并换号。
 - **动态模型探测**：确认此刻哪个档位真正可用。
 - **档位 / 额度自动检测**：Pro / Ultra / Plus / Free、5h 与 7d 剩余额度、模型所需档位；额度耗尽的账号自动跳过。
