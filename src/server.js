@@ -341,7 +341,7 @@ async function refreshCredentialUsage(cred, { force = false } = {}) {
     const usage = await fetchWebUsage(webSessionFor(cred));
     store.setCredentialUsage(cred.id, usage);
     logInfo(
-      `usage: ${cred.email || cred.id} tier=${usage.tier.label} ` +
+      `usage: ${cred.email || cred.id} fp=${usage.accountFingerprint || "-"} tier=${usage.tier.label} ` +
       `5h=${usage.fiveHour ? usage.fiveHour.remainingPercent + "%" : "?"} ` +
       `7d=${usage.weekly ? usage.weekly.remainingPercent + "%" : "?"}`,
     );
