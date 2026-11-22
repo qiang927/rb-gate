@@ -12,19 +12,13 @@ const DEFAULT_WEB_SIG = "24bb24c05e47e0aefa68a58a766179d9b613a600";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
 
 export const WEB_MODELS = {
-  // Gemini 4 family exposed by the current web UI:
-  // Hydrogen = everyday/fast, Neon = deeper analysis (thinking), Carbon = code/complex.
+  // The Gemini web client only exposes these five chat presets. Which backend
+  // model each preset maps to is decided by Google, so we address them by mode.
   "web-gemini-4-hydrogen": { mode: 1, think: 4, label: "Gemini 4 Hydrogen (Web)" },
   "web-gemini-4-neon": { mode: 2, think: 0, label: "Gemini 4 Neon (Web)" },
   "web-gemini-4-carbon": { mode: 3, think: 4, label: "Gemini 4 Carbon (Web)" },
   "web-gemini-4-auto": { mode: 4, think: 4, label: "Gemini 4 Auto (Web)" },
   "web-gemini-4-flash-lite": { mode: 6, think: 4, label: "Gemini 4 Flash-Lite (Web)" },
-  // Legacy ids kept for clients already wired to them.
-  "web-gemini-3.7-flash": { mode: 1, think: 4, label: "Gemini 4 Hydrogen (Web, legacy id)" },
-  "web-gemini-3.5-flash-thinking": { mode: 2, think: 0, label: "Gemini 4 Neon (Web, legacy id)" },
-  "web-gemini-3.1-pro": { mode: 3, think: 4, label: "Gemini 4 Carbon (Web, legacy id)" },
-  "web-gemini-auto": { mode: 4, think: 4, label: "Gemini 4 Auto (Web, legacy id)" },
-  "web-gemini-flash-lite": { mode: 6, think: 4, label: "Gemini 4 Flash-Lite (Web, legacy id)" },
 };
 
 export function lookupWebModel(id) {
@@ -33,6 +27,32 @@ export function lookupWebModel(id) {
 
 export function isWebModel(id) {
   return Boolean(WEB_MODELS[id]);
+}
+
+/**
+ * Ask the web endpoint which presets actually answer right now. The web UI has
+ * no model-list API, so the only honest check is a tiny prompt per preset.
+ */
+export async function probeWebModels(session, { timeoutMs = 60000 } = {}) {
+  const results = [];
+  for (const [id, cfg] of Object.entries(WEB_MODELS)) {
+    const started = Date.now();
+    let timer = null;
+    try {
+      const text = await Promise.race([
+        session.complete("ping", { model: id }),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new WebError("probe timed out", { status: 504, code: "probe_timeout" })), timeoutMs);
+        }),
+      ]);
+      results.push({ id, label: cfg.label, mode: cfg.mode, ok: true, ms: Date.now() - started, sample: String(text || "").trim().slice(0, 30) });
+    } catch (error) {
+      results.push({ id, label: cfg.label, mode: cfg.mode, ok: false, ms: Date.now() - started, error: error.message, code: error.code || "probe_failed" });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  return results;
 }
 
 export class WebError extends Error {
