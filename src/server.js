@@ -363,11 +363,14 @@ async function handleWebChat(req, res, body, model, stream) {
   if (!stream) {
     try {
       const text = await withAbuseRetry(() => session.complete(prompt, { model, temporary }));
+      store.markUsed(cred.id);
+      store.markOk(cred.id);
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       return res.json(buildOpenaiResponse({ text, model, toolCalls: [] }));
     } catch (error) {
       if (controller.signal.aborted) return res.end();
       const status = error.status || 502;
+      store.markError(cred.id, error.message, { cooldownMs: status === 429 ? 60_000 : 0 });
       logError(`web chat failed (${status}): ${error.message}`);
       return sendOpenaiError(res, status, error.message, { type: "web_error", code: error.code || "web_failed" });
     }
@@ -407,6 +410,8 @@ async function handleWebChat(req, res, body, model, stream) {
       send(buildOpenaiChunk({ id, model, created, delta: { content: delta } }));
       step = await iterator.next();
     }
+    store.markUsed(cred.id);
+    store.markOk(cred.id);
     send(buildOpenaiChunk({ id, model, created, delta: {}, finishReason: "stop" }));
     if (body.stream_options?.include_usage) {
       send(buildOpenaiChunk({ id, model, created, delta: {}, finishReason: null, usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } }));
@@ -414,6 +419,7 @@ async function handleWebChat(req, res, body, model, stream) {
     res.write("data: [DONE]\n\n");
     res.end();
   } catch (error) {
+    if (!controller.signal.aborted) store.markError(cred.id, error.message, { cooldownMs: error.status === 429 ? 60_000 : 0 });
     logError(`[web stream] ${error.message}`);
     if (!res.headersSent) {
       return sendOpenaiError(res, error.status || 502, error.message, { type: "web_error", code: error.code || "web_failed" });
