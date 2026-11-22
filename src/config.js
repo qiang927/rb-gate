@@ -64,6 +64,8 @@ export const config = {
   webProxy: (process.env.WEB_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "").trim(),
   // Bundled mihomo (Clash Meta) core used by the proxy pool.
   mihomoPath: process.env.MIHOMO_PATH || "/usr/local/bin/mihomo",
+  autoFastest: process.env.AUTO_FASTEST !== "0",
+  autoFastestMs: Math.max(60_000, Number(process.env.AUTO_FASTEST_MS) || 600_000),
   proxyPort: int(process.env.PROXY_PORT, 7891),
   proxyControllerPort: int(process.env.PROXY_CONTROLLER_PORT, 9090),
 
