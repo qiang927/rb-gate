@@ -210,9 +210,9 @@
             <span class="badge robin">web-* 直连</span>
           </div>
           <p class="hint">
-            服务端用 master token 生成的会话有时会被 Google 判定为未登录（302 到 ServiceLogin）。
-            这时可以直接粘贴浏览器里 <code>gemini.google.com</code> 的 Cookie，绕过服务端登录，供 <code>web-*</code> 模型使用。
-            格式就是请求头里的整段：<code>k=v; k=v; …</code>。Cookie 等价账号网页权限，退出登录即失效。
+            粘贴浏览器里 <code>gemini.google.com</code> 的 Cookie（<strong>不是</strong> <code>aistudio.google.com</code> 的），
+            格式就是请求头里的整段：<code>k=v; k=v; …</code>。每个 Cookie 对应一个账号，导入后自动参与轮换；
+            某条 Cookie 失效时只会影响它自己，其他账号继续可用。Cookie 等价账号网页权限，退出登录即失效。
           </p>
           <div class="field"><label>Google 邮箱（可选）</label><input id="webCookieEmail" type="email" placeholder="you@gmail.com" /></div>
           <div class="field"><label>Cookie</label><textarea id="webCookieInput" placeholder="SID=…; __Secure-1PSID=…; HSID=…" spellcheck="false" style="min-height:110px"></textarea></div>
@@ -300,6 +300,7 @@
           <button id="proxyRotateBtn">换节点</button>
           <button id="proxyStopBtn">停止</button>
           <button id="proxyRefreshBtn">刷新</button>
+          <button id="proxyTestAllBtn">测速全部</button>
         </div>
         <div id="proxyStatus" class="hint" style="margin-top:10px">未启动。</div>
         <div id="proxyNodes" class="grid cols-2" style="margin-top:10px"></div>
@@ -329,6 +330,7 @@
   const $ = (id) => document.getElementById(id);
   let token = "";
   let overview = null;
+  let proxyDelays = {};
 
   function toast(message, isError = false) {
     const el = $("toast");
@@ -622,10 +624,21 @@
     }
   }
 
+  function delayBadge(name) {
+    const entry = proxyDelays[name];
+    if (!entry) return "";
+    if (entry.ok === false) return `<span class="badge" style="background:#3a1d1d;color:#ff9c9c">超时</span>`;
+    const ms = Number(entry.delay) || 0;
+    const color = ms < 400 ? "#1d3a26" : ms < 900 ? "#3a331d" : "#3a1d1d";
+    const fg = ms < 400 ? "#8ef0b0" : ms < 900 ? "#ffe08a" : "#ff9c9c";
+    return `<span class="badge" style="background:${color};color:${fg}">${ms} ms</span>`;
+  }
+
   function renderProxy(proxy) {
     const status = $("proxyStatus");
     if (proxy.running) {
-      status.textContent = `运行中 · ${proxy.nodes.length} 个节点 · 当前：${proxy.current || "-"} · 订阅：${proxy.subscriptionHost || "-"}`;
+      const removed = proxy.removed ? ` · 已删除 ${proxy.removed} 个（重新导入订阅可恢复）` : "";
+      status.textContent = `运行中 · ${proxy.nodes.length} 个节点 · 当前：${proxy.current || "-"} · 订阅：${proxy.subscriptionHost || "-"}${removed}`;
     } else {
       status.textContent = proxy.error ? `未运行（${proxy.error}）` : "未启动。";
     }
@@ -637,7 +650,11 @@
     box.innerHTML = proxy.nodes.map((name) => `
       <div class="row" style="justify-content:space-between;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px 10px">
         <span class="mono small" style="word-break:break-all">${esc(name)}${name === proxy.current ? " · 当前" : ""}</span>
-        <button data-proxy-node="${esc(name)}">使用</button>
+        <span class="row" style="gap:6px;flex-shrink:0">
+          ${delayBadge(name)}
+          <button data-proxy-node="${esc(name)}">使用</button>
+          <button data-proxy-remove="${esc(name)}" style="color:#ff9c9c">删除</button>
+        </span>
       </div>`).join("");
   }
 
@@ -708,6 +725,23 @@
   });
   $("proxyRefreshBtn").addEventListener("click", loadProxy);
   $("proxyNodes").addEventListener("click", async (event) => {
+    const removeBtn = event.target.closest("[data-proxy-remove]");
+    if (removeBtn) {
+      const name = removeBtn.dataset.proxyRemove;
+      if (!confirm(`删除节点「${name}」？\n会重启本地代理内核，正在进行的请求会中断。`)) return;
+      removeBtn.disabled = true;
+      try {
+        const result = await api("/admin/api/proxy/remove", { method: "POST", body: JSON.stringify({ name }) });
+        delete proxyDelays[name];
+        renderProxy(result.proxy || {});
+        toast("已删除节点");
+      } catch (error) {
+        toast(error.message, true);
+      } finally {
+        removeBtn.disabled = false;
+      }
+      return;
+    }
     const btn = event.target.closest("[data-proxy-node]");
     if (!btn) return;
     try {
@@ -716,6 +750,27 @@
       toast("已切换节点");
     } catch (error) {
       toast(error.message, true);
+    }
+  });
+
+  $("proxyTestAllBtn").addEventListener("click", async () => {
+    const btn = $("proxyTestAllBtn");
+    btn.disabled = true;
+    btn.textContent = "测速中…";
+    try {
+      const result = await api("/admin/api/proxy/test-all", { method: "POST", body: "{}" });
+      proxyDelays = {};
+      for (const item of result.results || []) proxyDelays[item.name] = item;
+      const ok = (result.results || []).filter((item) => item.ok).length;
+      const sorted = (result.results || []).filter((item) => item.ok).map((item) => item.delay).sort((a, b) => a - b);
+      const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+      renderProxy((await api("/admin/api/proxy")).proxy || {});
+      toast(`测速完成：${ok}/${result.results.length} 可用，中位延迟 ${median} ms`);
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "测速全部";
     }
   });
 
