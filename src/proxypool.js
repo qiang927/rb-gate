@@ -107,6 +107,9 @@ class ProxyPool {
     this.error = "";
     this.subscription = "";
     this.startedAt = 0;
+    this.fastestTimer = null;
+    this.fastestAt = 0;
+    this.fastestNode = "";
   }
 
   get port() {
@@ -227,6 +230,7 @@ class ProxyPool {
     this.startedAt = Date.now();
     setOutboundProxy(`http://${CONTROLLER}:${this.port}`);
     logInfo(`proxy pool ready: ${this.nodes.length} nodes (${hostOf(this.subscription)})`);
+    this.#scheduleFastest();
     return this.status();
   }
 
@@ -296,6 +300,11 @@ class ProxyPool {
         /* ignore */
       }
     }
+    if (this.fastestTimer) {
+      clearTimeout(this.fastestTimer);
+      clearInterval(this.fastestTimer);
+      this.fastestTimer = null;
+    }
     this.nodes = [];
     this.proxies = [];
     this.current = "";
@@ -331,6 +340,47 @@ class ProxyPool {
     return { name: target, delay: out?.delay ?? null };
   }
 
+  #scheduleFastest() {
+    if (!config.autoFastest) return;
+    if (this.fastestTimer) {
+      clearTimeout(this.fastestTimer);
+      clearInterval(this.fastestTimer);
+    }
+    this.fastestTimer = null;
+    const first = setTimeout(() => {
+      void this.pickFastest();
+      this.fastestTimer = setInterval(() => void this.pickFastest(), config.autoFastestMs);
+      if (typeof this.fastestTimer?.unref === "function") this.fastestTimer.unref();
+    }, 20_000);
+    if (typeof first.unref === "function") first.unref();
+    this.fastestTimer = first;
+  }
+
+  async pickFastest() {
+    if (!this.running || this.nodes.length < 2) return "";
+    let results;
+    try {
+      results = await this.testAll();
+    } catch (error) {
+      logWarn(`proxy pool: auto speed test failed: ${error.message}`);
+      return "";
+    }
+    const usable = results.filter((item) => item.ok && item.delay > 0).sort((a, b) => a.delay - b.delay);
+    if (!usable.length) return "";
+    const best = usable[0];
+    this.fastestAt = Date.now();
+    this.fastestNode = best.name;
+    if (best.name !== this.current) {
+      try {
+        await this.select(best.name);
+        logInfo(`proxy pool: auto switched to fastest node ${best.name} (${best.delay}ms)`);
+      } catch (error) {
+        logWarn(`proxy pool: auto switch failed: ${error.message}`);
+      }
+    }
+    return best.name;
+  }
+
   status() {
     return {
       running: this.running,
@@ -341,6 +391,12 @@ class ProxyPool {
       subscriptionHost: this.subscription ? hostOf(this.subscription) : "",
       startedAt: this.startedAt,
       removed: (store.settings()?.proxyRemoved || []).length,
+      fastest: {
+        enabled: config.autoFastest,
+        intervalMs: config.autoFastestMs,
+        lastAt: this.fastestAt,
+        node: this.fastestNode,
+      },
       binary: config.mihomoPath,
     };
   }
