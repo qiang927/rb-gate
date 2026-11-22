@@ -30,23 +30,23 @@ export const PUBLIC_WEB_API_KEY = "AIzaSyDdP816MREB3SkjZO04QXbjsigfcI0GWOs";
 export const EXT_BIN_HEADER = "CAASAUIwATgEQABQBFgDYgJKUHAAeAGQAQCYAQE=";
 
 /**
- * Models exposed as `studio-*`. The upstream id is what goes into wire[0].
+ * Models exposed as `pggo-*`. The upstream id is what goes into wire[0].
  * Kept small on purpose: the AI Studio catalog moves fast, extend via env
  * `AI_STUDIO_MODELS` (comma separated upstream ids) when it does.
  */
 export const AI_STUDIO_MODELS = [
-  { id: "studio-gemini-4-neon", upstream: "models/gemini-4-neon", name: "Gemini 4 Neon (AI Studio)" },
-  { id: "studio-gemini-4-hydrogen", upstream: "models/gemini-4-hydrogen", name: "Gemini 4 Hydrogen (AI Studio)" },
-  { id: "studio-gemini-4-carbon", upstream: "models/gemini-4-carbon", name: "Gemini 4 Carbon (AI Studio)" },
-  { id: "studio-gemini-4-argon", upstream: "models/gemini-4-argon", name: "Gemini 4 Argon (AI Studio)" },
-  { id: "studio-gemini-3.8-flash", upstream: "models/gemini-3.8-flash", name: "Gemini 3.8 Flash (AI Studio)" },
-  { id: "studio-gemini-3.6-flash", upstream: "models/gemini-3.6-flash", name: "Gemini 3.6 Flash (AI Studio)" },
-  { id: "studio-gemini-3.1-pro-preview", upstream: "models/gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview (AI Studio)" },
-  { id: "studio-gemini-3-flash-preview", upstream: "models/gemini-3-flash-preview", name: "Gemini 3 Flash Preview (AI Studio)" },
-  { id: "studio-gemini-3.5-flash-lite", upstream: "models/gemini-3.5-flash-lite", name: "Gemini 3.5 Flash Lite (AI Studio)" },
-  { id: "studio-gemini-3.1-flash-lite", upstream: "models/gemini-3.1-flash-lite", name: "Gemini 3.1 Flash Lite (AI Studio)" },
-  { id: "studio-gemini-pro-latest", upstream: "models/gemini-pro-latest", name: "Gemini Pro Latest (AI Studio)" },
-  { id: "studio-gemini-flash-latest", upstream: "models/gemini-flash-latest", name: "Gemini Flash Latest (AI Studio)" },
+  { id: "pggo-gemini-4-neon", upstream: "models/gemini-4-neon", name: "Gemini 4 Neon (AI Studio)" },
+  { id: "pggo-gemini-4-hydrogen", upstream: "models/gemini-4-hydrogen", name: "Gemini 4 Hydrogen (AI Studio)" },
+  { id: "pggo-gemini-4-carbon", upstream: "models/gemini-4-carbon", name: "Gemini 4 Carbon (AI Studio)" },
+  { id: "pggo-gemini-4-argon", upstream: "models/gemini-4-argon", name: "Gemini 4 Argon (AI Studio)" },
+  { id: "pggo-gemini-3.8-flash", upstream: "models/gemini-3.8-flash", name: "Gemini 3.8 Flash (AI Studio)" },
+  { id: "pggo-gemini-3.6-flash", upstream: "models/gemini-3.6-flash", name: "Gemini 3.6 Flash (AI Studio)" },
+  { id: "pggo-gemini-3.1-pro-preview", upstream: "models/gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview (AI Studio)" },
+  { id: "pggo-gemini-3-flash-preview", upstream: "models/gemini-3-flash-preview", name: "Gemini 3 Flash Preview (AI Studio)" },
+  { id: "pggo-gemini-3.5-flash-lite", upstream: "models/gemini-3.5-flash-lite", name: "Gemini 3.5 Flash Lite (AI Studio)" },
+  { id: "pggo-gemini-3.1-flash-lite", upstream: "models/gemini-3.1-flash-lite", name: "Gemini 3.1 Flash Lite (AI Studio)" },
+  { id: "pggo-gemini-pro-latest", upstream: "models/gemini-pro-latest", name: "Gemini Pro Latest (AI Studio)" },
+  { id: "pggo-gemini-flash-latest", upstream: "models/gemini-flash-latest", name: "Gemini Flash Latest (AI Studio)" },
 ];
 
 export function listStudioModels() {
@@ -60,7 +60,7 @@ export function listStudioModels() {
     if (seen.has(upstream)) continue;
     seen.add(upstream);
     const name = upstream.replace(/^models\//, "");
-    models.push({ id: `studio-${name}`, upstream, name: `${name} (AI Studio)` });
+    models.push({ id: `pggo-${name}`, upstream, name: `${name} (AI Studio)` });
   }
   return models;
 }
@@ -70,7 +70,7 @@ export function lookupStudioModel(id) {
   const models = listStudioModels();
   const direct = models.find((item) => item.id === id);
   if (direct) return direct;
-  const bare = String(id).replace(/^studio-/, "");
+  const bare = String(id).replace(/^pggo-/, "");
   return (
     models.find((item) => item.upstream === bare) ||
     models.find((item) => item.upstream === `models/${bare}`) ||
