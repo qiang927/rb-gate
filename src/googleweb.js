@@ -1,5 +1,7 @@
 import https from "node:https";
 import crypto from "node:crypto";
+import { HttpsProxyAgent } from "https-proxy-agent";
+import { config } from "./config.js";
 import { mintBearer } from "./gpsoauth.js";
 
 const OAUTH_LOGIN_SERVICE = "https://www.google.com/accounts/OAuthLogin";
@@ -41,6 +43,16 @@ export class WebError extends Error {
   }
 }
 
+let proxyAgent = null;
+function outboundAgent() {
+  if (!config.webProxy) return undefined;
+  if (!proxyAgent) {
+    const target = /^[a-z]+:\/\//i.test(config.webProxy) ? config.webProxy : `http://${config.webProxy}`;
+    proxyAgent = new HttpsProxyAgent(target);
+  }
+  return proxyAgent;
+}
+
 function request(url, { method = "GET", headers = {}, body = null, timeoutMs = 60000 } = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
@@ -49,6 +61,7 @@ function request(url, { method = "GET", headers = {}, body = null, timeoutMs = 6
         hostname: u.hostname,
         path: u.pathname + u.search,
         method,
+        agent: outboundAgent(),
         maxHeaderSize: 131072,
         headers: { "user-agent": UA, "accept-language": "en-US,en;q=0.9", "accept-encoding": "identity", ...headers },
         timeout: timeoutMs,
@@ -74,6 +87,7 @@ function openStream(url, { headers = {}, body = null, timeoutMs = 120000 } = {})
         hostname: u.hostname,
         path: u.pathname + u.search,
         method: "POST",
+        agent: outboundAgent(),
         maxHeaderSize: 131072,
         headers: { "user-agent": UA, "accept-language": "en-US,en;q=0.9", "accept-encoding": "identity", ...headers },
         timeout: timeoutMs,
