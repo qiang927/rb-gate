@@ -145,6 +145,7 @@ https://<service-name>.onrender.com
 - 导入时服务端会调 `ListModels` + `GetAiStudioBenefitTier` 校验 Cookie，并读取账号档位（Free/Pro/Ultra）；模型清单以该账号的实际目录为准，不是写死的。
 - 上游是 AI Studio 的 MakerSuite 私有 RPC，需要容器里的 WAA（BotGuard）签名器：Docker 镜像自动带上（`WAA_SIGNER_PATH`），本地跑要指向 `waa-signer` 二进制。
 - 网页版与 AI Studio 的档位/额度互不相干；4 Argon 这类付费模型仍可能返回 `503 high demand`，以 AI Studio 页面为准。
+- 第一次调用要冷启动签名器（约 5–10 秒），再叠加模型思考时间，单次可能要 30–100 秒；之后热启动快得多。
 
 ---
 
@@ -155,7 +156,7 @@ https://<service-name>.onrender.com
 - **多凭证轮换**：Cookie 导入前验证；按最久未用优先；失败自动冷却并换号。
 - **动态模型探测**：确认此刻哪个档位真正可用。
 - **档位 / 额度自动检测**：Pro / Ultra / Plus / Free、5h 与 7d 剩余额度、模型所需档位；额度耗尽的账号自动跳过。
-- **Clash 代理池**：内置 mihomo 内核，导入订阅即用；测速、删除节点、每 10 分钟自动切最快；命中 `/sorry` 自动换节点重试。
+- **Clash 代理池**：内置 mihomo 内核，导入订阅即用；自动跳过订阅里的“剩余流量/官网/时间戳”横幅节点；测速、删除节点、每 10 分钟自动切最快；命中 `/sorry` 自动换节点重试。
 - **管理面板**：凭证、API Keys、模型、日志、密码、代理池；桌面宽屏（1440px 双栏）与手机自适应。
 - **零数据库**：JSON + 原子写；Cookie AES-256-GCM 加密；admin 密码 scrypt。
 - **Cloudflare KV 持久化**：免费层重启不丢数据（可选）。

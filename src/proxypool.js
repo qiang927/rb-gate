@@ -49,6 +49,19 @@ async function fetchText(url) {
   throw lastError;
 }
 
+// Subscriptions often ship banner nodes ("剩余流量 12GB", "官网 t.me/...",
+// "06-07 06:56:37 科技共享 EDT 导航"). They answer health checks from the
+// provider's landing page, so auto-fastest would happily pick one and every
+// Gemini request would time out. Drop them at parse time.
+const INFO_NODE_PATTERN =
+  /(剩余|到期|流量|官网|订阅|客服|防失联|重置|套餐|导航|群组|交流|购买|网址|t\.me|telegram|@[a-z0-9_]{4,})/i;
+const INFO_NODE_TIME = /\d{2}-\d{2}\s+\d{2}:\d{2}/;
+
+export function isInfoNode(name) {
+  const value = String(name || "");
+  return INFO_NODE_PATTERN.test(value) || INFO_NODE_TIME.test(value);
+}
+
 export function parseClashConfig(text) {
   let doc = null;
   try {
@@ -66,7 +79,14 @@ export function parseClashConfig(text) {
     }
   }
   const proxies = (Array.isArray(doc?.proxies) ? doc.proxies : []).filter(
-    (item) => item && typeof item === "object" && item.name && item.type && item.server && item.port,
+    (item) =>
+      item &&
+      typeof item === "object" &&
+      item.name &&
+      item.type &&
+      item.server &&
+      item.port &&
+      !isInfoNode(item.name),
   );
   const nodes = proxies.map((item) => ({ name: String(item.name), type: String(item.type) }));
   return { nodes, proxies };

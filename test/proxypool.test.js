@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildMihomoConfig, parseClashConfig } from "../src/proxypool.js";
+import { buildMihomoConfig, isInfoNode, parseClashConfig } from "../src/proxypool.js";
 
 const SAMPLE = `
 port: 7890
@@ -43,4 +43,17 @@ test("buildMihomoConfig wires a selector group and match rule", () => {
   assert.equal(cfg.secret, "s");
   assert.deepEqual(cfg["proxy-groups"][0].proxies, ["node-a", "node-b"]);
   assert.deepEqual(cfg.rules, ["MATCH,POOL"]);
+});
+
+test("info nodes are dropped from subscriptions", () => {
+  assert.equal(isInfoNode("剩余流量 12GB"), true);
+  assert.equal(isInfoNode("官网 t.me/example"), true);
+  assert.equal(isInfoNode("06-07 06:56:37 | 科技共享 EDT 导航"), true);
+  assert.equal(isInfoNode("CF 移动优选 | 104.17.50.245"), false);
+  const parsed = parseClashConfig(`proxies:
+  - { name: "剩余流量 12GB", type: ss, server: info.example.com, port: 1 }
+  - { name: "CF 移动优选", type: ss, server: 1.2.3.4, port: 443 }
+`);
+  assert.equal(parsed.nodes.length, 1);
+  assert.equal(parsed.nodes[0].name, "CF 移动优选");
 });
