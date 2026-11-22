@@ -63,6 +63,7 @@
     #credsTableWrap { overflow-x: auto; }
     #credsTableWrap table { min-width: 780px; }
     #credsTableWrap td.actions { white-space: nowrap; }
+    @media (max-width: 1400px) { #credsTableWrap .col-error { display: none; } }
   }
   .import-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
   .models-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px; align-items: start; }
@@ -593,7 +594,7 @@
         <div>${cred.uses || 0} 次</div>
         <div class="muted">${esc(ago(cred.lastUsedAt))}</div>
       </td>
-      <td data-label="最近错误" class="small" style="max-width:240px">
+      <td data-label="最近错误" class="small col-error" style="max-width:240px">
         ${cred.lastError ? `<span style="color:var(--red)">${esc(String(cred.lastError).slice(0, 160))}</span>` : '<span class="muted">—</span>'}
       </td>
       <td class="actions">
@@ -622,7 +623,7 @@
       const list = byGroup[group.id] || [];
       const body = list.length
         ? `<table class="cards">
-            <thead><tr><th>账号</th><th>类型</th><th>状态</th><th>档位</th><th>额度</th><th>用量</th><th>最近错误</th><th></th></tr></thead>
+            <thead><tr><th>账号</th><th>类型</th><th>状态</th><th>档位</th><th>额度</th><th>用量</th><th class="col-error">最近错误</th><th></th></tr></thead>
             <tbody>${list.map(credRow).join("")}</tbody>
           </table>`
         : '<div class="empty small">这个组还没有凭证。</div>';
