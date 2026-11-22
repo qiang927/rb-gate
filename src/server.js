@@ -499,7 +499,7 @@ async function handleWebChat(req, res, body, model, stream) {
         wroteRole = true;
       }
       send(buildOpenaiChunk({ id, model, created, delta: { content: delta } }));
-      step = await iterator.next();
+      step = await candidate.next();
     }
     store.markUsed(cred.id);
     store.markOk(cred.id);
@@ -583,14 +583,22 @@ async function handleStudioChat(req, res, body, modelId, stream) {
     }
   }
 
-  // Pull the first frame before flushing SSE headers so cookie/proof failures
-  // can still be reported as JSON.
-  let iterator = null;
-  let firstStep = null;
+  // Fast failures (bad cookie, missing signer) should still be JSON, but a
+  // slow model must not leave the connection silent: Render closes idle
+  // connections after about 100s. Wait briefly for the first frame, then flush
+  // SSE headers and keep the connection alive with comments while it thinks.
+  const candidate = streamStudioChat(options)[Symbol.asyncIterator]();
+  const pendingFirst = candidate.next();
+  const slowMarker = Symbol("slow-first-frame");
+  let firstStep;
   try {
-    const candidate = streamStudioChat(options)[Symbol.asyncIterator]();
-    firstStep = await candidate.next();
-    iterator = candidate;
+    firstStep = await Promise.race([
+      pendingFirst,
+      new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(slowMarker), SSE_FIRST_FRAME_WAIT_MS);
+        timer.unref?.();
+      }),
+    ]);
   } catch (error) {
     if (controller.signal.aborted) return res.end();
     logError(`studio chat failed (${error.status || 502}): ${error.message}`);
@@ -604,6 +612,7 @@ async function handleStudioChat(req, res, body, modelId, stream) {
   const created = Math.floor(Date.now() / 1000);
   res.writeHead(200, openaiSseHeaders());
   const send = (chunk) => res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+  const stopHeartbeat = startSseHeartbeat(res);
   let wroteRole = false;
   let usage = null;
   const ensureRole = () => {
@@ -612,6 +621,10 @@ async function handleStudioChat(req, res, body, modelId, stream) {
     wroteRole = true;
   };
   try {
+    if (firstStep === slowMarker) {
+      ensureRole();
+      firstStep = await pendingFirst;
+    }
     let step = firstStep;
     while (!step.done) {
       const frame = step.value;
@@ -635,13 +648,30 @@ async function handleStudioChat(req, res, body, modelId, stream) {
     }
     res.write("data: [DONE]\n\n");
     res.end();
+    stopHeartbeat();
   } catch (error) {
+    stopHeartbeat();
     logError(`[studio stream] ${error.message}`);
     store.markError(credential.id, error.message);
     res.write(`data: ${JSON.stringify({ error: { message: explainWaaError(error), type: "studio_error" } })}\n\n`);
     res.write("data: [DONE]\n\n");
     res.end();
   }
+}
+
+const SSE_FIRST_FRAME_WAIT_MS = 8_000;
+
+function startSseHeartbeat(res, intervalMs = 10_000) {
+  const timer = setInterval(() => {
+    if (res.writableEnded || res.destroyed) return;
+    try {
+      res.write(": keep-alive\n\n");
+    } catch {
+      /* the socket is gone; the stream loop will notice */
+    }
+  }, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
 }
 
 function openaiUsage(usage) {
