@@ -166,7 +166,7 @@ export async function importAistudio({ email = "", cookie, label = "" }) {
   }
   const credential = store.upsertCredential({
     type: "aistudio",
-    group: "aistudio",
+    group: "pggo",
     email,
     label,
     cookie: prepared.header,
