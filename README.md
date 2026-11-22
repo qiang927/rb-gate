@@ -1,30 +1,190 @@
-# robin-gateway（Cookie 版）
+# robin-gateway
 
-把 **Gemini 网页版会话**包装成 **OpenAI 兼容 API**，带凭证管理面板，可部署到 Render。
+把 **Gemini 网页版会话**包装成 **OpenAI 兼容 API** 的自托管网关。带管理面板、多账号轮换、Clash 代理池，可一键部署到 Render。
+
+- 5 个网页版模型：`web-gemini-4-hydrogen` / `-neon` / `-carbon` / `-auto` / `-flash-lite`
+- 用你自己的 Google 账号，**不需要** Gemini API Key
+- 一个二进制/一个容器，无数据库
+- 有手就行 → **[保姆级部署文档](docs/02-部署.md)**
+
+> ⚠️ 非官方接口。Google 的服务条款不欢迎把网页版会话当 API 用，存在账号被限制/封禁的风险。只建议个人自用，详见[风险](#风险与合规)。
+
+---
+
+## 它是什么，不是什么
+
+**是**：把 `gemini.google.com` 的对话框流量翻译成 `POST /v1/chat/completions`，于是任何 OpenAI 客户端都能用 Gemini 4 的网页版档位。
+
+**不是**：
+
+- 官方 Gemini API 的转发（那条路要付费 key，且受支持模型不同）；
+- 公共池 / 共享账号服务（只服务你自己导入的账号）；
+- 全功能 API——网页版**不支持**图片输入、函数调用、JSON mode，所以这里也没有；
+- 网页版**没有 4 Argon**。需要 Argon 请走官方 API 付费层（`gemini-4-argon`）。
+
+---
+
+## 原理（一图流）
 
 ```
-浏览器 Cookie（gemini.google.com）
-      │  AES-256-GCM 加密落盘 / Cloudflare KV
-      ▼
-GoogleWebSession ── GET gemini.google.com/app 取 at/bl
-      │
-      └─ POST /_/BardChatUi/data/.../StreamGenerate（mode 决定模型）
-               └─ web-* 模型（Gemini 4 Hydrogen / Neon / Carbon / Auto / Flash-Lite）
+你的浏览器
+  │ 登录 gemini.google.com，复制 Cookie（含 SID / SAPISID …）
+  ▼
+robin-gateway（Render / 本地）
+  │ Cookie 用 AES-256-GCM 加密存盘 / Cloudflare KV
+  │
+  ├─ GoogleWebSession
+  │    GET  gemini.google.com/app      → 拿 at / bl（缓存 30 分钟）
+  │    POST …/BardFrontendService/StreamGenerate
+  │         f.req = [[null, JSON(inner[102])]]
+  │         inner[0]  = 提示词
+  │         inner[17] = 思考等级（think）
+  │         inner[41] = 历史模式（2 持久 / 1 临时）
+  │         inner[79] = mode → 决定模型档位
+  │            1=Hydrogen  2=Neon  3=Carbon  4=Auto  6=Flash-Lite
+  │         ← SSE 帧流 → 解析出增量文本
+  │
+  ├─ 代理池（可选）：mihomo 内核 + Clash 订阅节点
+  │    命中 /sorry 验证页 → 自动换节点重试
+  │
+  └─ 多凭证：按「最久未用」轮换；429/失效自动冷却
+  ▼
+OpenAI 兼容响应（流式 / 非流式）
 ```
 
-> 早期版本支持 robin（`oauth_token` → master token → Code Assist / 服务端换 Cookie）。实测两条路都被 Google 挡死：
-> `agy-*` 报 `RESTRICTED_CLIENT`，服务端 mint 的网页版会话被判定为未登录（302 到 `ServiceLogin`）。
-> 因此现在只保留**浏览器 Cookie 直连**这一种凭证来源。
+更细的字段表、为什么需要 `at`/`bl`、`maxHeaderSize` 坑、帧解析规则，都在 **[docs/01-原理.md](docs/01-原理.md)**。
+
+---
+
+## 快速开始
+
+完整步骤（含截图级的操作说明）在 **[docs/02-部署.md](docs/02-部署.md)**。最短路径：
+
+1. Fork 本仓库。
+2. （推荐）建 Cloudflare KV，拿到 Account ID / Namespace ID / 一个 `Workers KV Storage:Edit` 的 Token。
+3. Render → New Web Service → 连你的 fork → **Docker** → **Free**。
+4. 环境变量：
+
+   | 变量 | 值 |
+   |---|---|
+   | `ADMIN_PASSWORD` | 你的面板密码 |
+   | `ENCRYPTION_KEY` | 64 位随机 hex，**填了就别改** |
+   | `CF_KV_API_TOKEN` / `CF_ACCOUNT_ID` / `CF_KV_NAMESPACE_ID` | 可选，但免费层强烈建议 |
+
+5. 构建完成后打开 Render 给的地址 → `地址/admin/` → 登录。
+6. 「凭证」→ 粘贴 `gemini.google.com` 的 Cookie → 验证并导入。
+7. 「API Keys」→ 新建 → 复制 `sk-robin-...`。
+8. 客户端 Base URL 填 `https://<你的地址>/v1`。
+
+---
+
+## ⚠️ 关于 Render 网址（重要）
+
+Render 生成的域名**不包含**你的 Render 用户名，规则是：
+
+```
+https://<service-name>.onrender.com
+```
+
+- `<service-name>` = 你创建服务时填的 **Name**，默认取仓库名；
+- 如果名字被占用，Render 会**自动加随机后缀**（如 `rb-gate-9x2k.onrender.com`）；
+- **不存在** `https://<用户名>.onrender.com` 这种格式；
+- 唯一可靠的地址来源：<https://dashboard.render.com> → 你的服务 → 顶部 URL。
+
+因此：
+
+| 用途 | 地址 |
+|---|---|
+| 管理面板 | `https://<实际地址>/admin/`（末尾斜杠） |
+| OpenAI Base URL | `https://<实际地址>/v1` |
+| 健康检查 | `https://<实际地址>/health` |
+
+改名或绑自定义域名的后果：旧地址立即失效、所有客户端要改 Base URL、浏览器登录 Cookie 不跨域名（需重新登录），数据不受影响。详见 [FAQ Q1/Q2](docs/04-常见问题.md)。
+
+---
+
+## 模型
+
+`GET /v1/models` 返回 5 个模型：
+
+| 模型 ID | 网页端档位 | 适合 |
+|---|---|---|
+| `web-gemini-4-hydrogen` | 4 Hydrogen | 日常问答，快 |
+| `web-gemini-4-neon` | 4 Neon | 深度分析 |
+| `web-gemini-4-carbon` | 4 Carbon | 代码 / 复杂任务 |
+| `web-gemini-4-auto` | 自动 | 让 Google 选 |
+| `web-gemini-4-flash-lite` | Flash-Lite | 极快、简单任务 |
+
+网页端没有公开的模型列表接口，所谓“动态读取”是**面板逐个档位发 ping**：
+
+- 面板「模型」→ **动态探测**（约 10–20 秒）；
+- 结果写进 `/v1/models` 的 `metadata.available` / `latency_ms` / `checked_at`。
+
+旧 ID（`web-gemini-3.7-flash` 等）已删除，用旧名会 404。
+
+---
 
 ## 特性
 
 - **OpenAI 兼容**：`POST /v1/chat/completions`（流式/非流式）、`GET /v1/models`；支持 system、多轮、`stream_options.include_usage`。
-- **5 个 `web-*` 模型**：`web-gemini-4-hydrogen/neon/carbon/auto/flash-lite`（旧 ID 别名已移除）。
-- **动态模型检测**：面板「模型」页可对 5 个预设各发一句 ping，确认此刻真正可用的模型（`/v1/models` 的 `metadata.available` 同步）。
-- **凭证管理**：Cookie 导入（导入前自动验证）、测试、禁用、删除；多凭证按最久未用优先轮换。
-- **管理面板** `/admin/`：凭证、API Keys、模型表、运行日志、改密码。
-- **零数据库**：JSON 文件 + 原子写；Cookie 用 `ENCRYPTION_KEY` 加密；admin 密码 scrypt。
-- **可选 Cloudflare KV 持久化**：解决 Render 免费层重启丢 `/data` 的问题。
+- **多凭证轮换**：Cookie 导入前验证；按最久未用优先；失败自动冷却并换号。
+- **动态模型探测**：确认此刻哪个档位真正可用。
+- **Clash 代理池**：内置 mihomo 内核，导入订阅即用；测速、删除节点、每 10 分钟自动切最快；命中 `/sorry` 自动换节点重试。
+- **管理面板**：凭证、API Keys、模型、日志、密码、代理池；桌面/手机自适应。
+- **零数据库**：JSON + 原子写；Cookie AES-256-GCM 加密；admin 密码 scrypt。
+- **Cloudflare KV 持久化**：免费层重启不丢数据（可选）。
+
+---
+
+## 环境变量
+
+| 变量 | 必需 | 默认 | 说明 |
+|---|---|---|---|
+| `PORT` | 否 | `8787` | Render 会自动注入 |
+| `DATA_DIR` | 否 | `./data` | Render 上建议 `/data` |
+| `ADMIN_PASSWORD` | 推荐 | 随机生成并打印 | 设置后无法在面板内修改 |
+| `ENCRYPTION_KEY` | PaaS 必填 | 本地 key 文件 | 加密 Cookie；**必须固定** |
+| `SESSION_SECRET` | 否 | 由 `ENCRYPTION_KEY` 派生 | 面板会话签名 |
+| `GATEWAY_API_KEYS` | 否 | — | 预置 key，逗号分隔（不落库） |
+| `CF_KV_API_TOKEN` / `CF_ACCOUNT_ID` / `CF_KV_NAMESPACE_ID` | 否 | — | 三项齐全才启用 KV |
+| `CF_KV_BASE_URL` | 否 | `https://api.cloudflare.com` | 调试用 |
+| `WEB_PROXY` | 否 | — | 单代理（`http://host:port`），优先于 `/sorry` 兜底 |
+| `MIHOMO_PATH` | 否 | `/usr/local/bin/mihomo` | 代理池内核 |
+| `PROXY_PORT` | 否 | `7891` | 本地 mixed 端口 |
+| `PROXY_CONTROLLER_PORT` | 否 | `9090` | 仅监听 127.0.0.1 |
+| `AUTO_FASTEST` | 否 | 开 | `0` 关闭自动切最快节点 |
+| `AUTO_FASTEST_MS` | 否 | `600000` | 自动测速间隔 |
+| `LOG_REQUESTS` | 否 | — | 记录每个请求 |
+
+---
+
+## API
+
+公开（`/health`、`/v1/models` 免鉴权；聊天需 `Authorization: Bearer sk-robin-...`）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/health` | 健康检查 |
+| GET | `/v1/models` | 模型列表（含 `metadata`） |
+| GET | `/v1/models/:id` | 单个模型 |
+| POST | `/v1/chat/completions` | 聊天（流式/非流式） |
+
+管理（需登录 Cookie 或 `X-Admin-Password`）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/admin/api/login` / `logout` | 登录 / 退出 |
+| GET | `/admin/api/overview` | 概览（凭证、模型、代理、统计） |
+| GET/POST | `/admin/api/keys`，DELETE `/keys/:id` | API Key 管理 |
+| POST | `/admin/api/credentials/import-web-cookie` | 导入 Gemini Cookie |
+| POST | `/admin/api/web/probe` | 单 Cookie 探测 |
+| POST | `/admin/api/credentials/:id/test`，PATCH/DELETE `:id` | 测试 / 启停 / 删除 |
+| GET | `/admin/api/web/models`，POST `web/models/probe` | 动态模型探测 |
+| GET/POST | `/admin/api/proxy`，`proxy/import` `proxy/select` `proxy/rotate` `proxy/test-all` `proxy/remove` `proxy/stop` | 代理池 |
+| GET | `/admin/api/logs` | 最近日志 |
+| POST | `/admin/api/password` | 改密码（`ADMIN_PASSWORD` 已设置时拒绝） |
+
+---
 
 ## 本地运行
 
@@ -32,136 +192,48 @@ GoogleWebSession ── GET gemini.google.com/app 取 at/bl
 cd robin-gateway
 npm install
 ADMIN_PASSWORD=your-password npm start
-# 控制台 http://localhost:8787/admin/
+# http://localhost:8787/admin/
 ```
 
-首次启动会打印自动生成的 `sk-robin-…` API Key 和 admin 密码（若未设 `ADMIN_PASSWORD`）。数据在 `DATA_DIR`（默认 `./data`）。
+数据在 `DATA_DIR`（默认 `./data`）。首次未设 `ADMIN_PASSWORD` 时会打印随机密码。
 
-## 导入凭证（Gemini 网页版 Cookie）
+代理池要本地试的话，需要 `MIHOMO_PATH` 指向可执行的 mihomo；Docker 镜像已内置。
 
-1. 浏览器正常登录并打开 <https://gemini.google.com>，确认能对话。
-2. F12 → Network → 随便点一个 `gemini.google.com` 的请求 → Request Headers → 复制整段 `Cookie`（格式 `k=v; k=v; …`）。
-   - 也可以在 Application → Cookies → `https://gemini.google.com` 逐项复制后拼起来。
-3. 打开网关 `/admin/` →「Gemini 网页版 Cookie」→ 粘贴 →「验证并导入」。导入时会先请求一次 Gemini 验证，无效会直接报错。
-4. 在「凭证池」里可以「测试」确认会话仍然有效。
-
-Cookie 常见有效期几小时到几天；失效后重新粘贴。退出登录 / 改密码会立即失效。
-
-## 模型
-
-`GET /v1/models` 返回 10 个模型，全部走网页版通道，`groups: ["robin"]`：
-
-| 模型 ID | 网页版档位 |
-|---|---|
-| `web-gemini-4-hydrogen` | 4 Hydrogen（日常） |
-| `web-gemini-4-neon` | 4 Neon（深度分析） |
-| `web-gemini-4-carbon` | 4 Carbon（代码/复杂） |
-| `web-gemini-4-auto` | 自动 |
-| `web-gemini-4-flash-lite` | Flash-Lite |
-
-模型名以 `web-gemini-4-` 开头；旧 ID（`web-gemini-3.7-flash` 等）已删除。是否可用以面板「模型 → 动态探测」结果为准。
-
-网页版没有 4 Argon；需要 Argon 只能用 Gemini API 付费层（`gemini-4-argon`）。
-
-## 部署到 Render
-
-1. 新建 Web Service，Docker 部署，仓库根目录即 `robin-gateway/`。
-2. 环境变量：`ADMIN_PASSWORD`、`ENCRYPTION_KEY`（固定值）、可选 Cloudflare KV 三项（见下）。
-3. 健康检查 `/health`，端口用 Render 注入的 `PORT`。
-
-### Cloudflare KV 持久化（免费层推荐）
-
-1. Cloudflare Dashboard → Workers & Pages → KV → 创建 namespace。
-2. 创建 API Token（权限 `Workers KV Storage:Edit`）。
-3. Render 环境变量加 `CF_KV_API_TOKEN`、`CF_ACCOUNT_ID`、`CF_KV_NAMESPACE_ID`。
-4. 启动日志出现 `store: Cloudflare KV mode` 即生效；凭证、API keys、admin、settings 都会同步到 `robin/*` key。
-
-免费层每天 1000 次写、10 万次读；用量统计按 5 分钟合并写。`ENCRYPTION_KEY` 必须固定，否则重启后 KV 里的密文解不开。
-
-## 代理池（Clash 订阅）
-
-Google 有时会把机房 IP（Render 等）判成「异常流量」，`gemini.google.com` 直接 302 到 `www.google.com/sorry/index`。
-面板「设置 → 代理池」可以导入一条 **Clash 订阅 URL**，网关会：
-
-1. 下载订阅、解析 `proxies:` 列表；
-2. 用内置的 mihomo（Clash Meta）内核在服务端拉起本地代理 `127.0.0.1:7891`；
-3. 所有 Gemini 网页版请求走这个本地代理，按订阅节点出站；
-4. 命中 `/sorry` 验证页时自动切到下一个节点重试（SSE 流式也一样）；
-5. 节点可手动切换，状态与当前节点在面板里可见，订阅 URL 会持久化（KV 模式同样生效）。
-
-节点管理：
-
-- **自动测速**：启动约 20 秒后首次执行，之后每 10 分钟一次；每次测完自动切到延迟最低的可用节点（只切 selector，不重启内核），当前选择会标「最快」；
-- **测速全部**：并发探测每个节点到 `gstatic.com` 的延迟，结果按 ms 显示（绿/黄/红），中位延迟会在提示里给出；
-- **删除**：把节点从当前代理池剔除（会短暂重启 mihomo 内核），删除记录持久化，重启/重新部署后仍然生效；
-- **恢复**：重新「导入并启动」订阅即可清空删除记录，恢复全部节点。
-
-环境变量：
-
-| 变量 | 说明 |
-|---|---|
-| `MIHOMO_PATH` | mihomo 二进制路径，默认 `/usr/local/bin/mihomo`（Docker 镜像自带） |
-| `PROXY_PORT` | 本地 mixed 端口，默认 `7891` |
-| `PROXY_CONTROLLER_PORT` | mihomo 控制端口，默认 `9090`（仅监听 127.0.0.1） |
-| `WEB_PROXY` | 不想用订阅时，可直接指定一个 HTTP 代理（`http://user:pass@host:port`） |
-| `AUTO_FASTEST` | 设为 `0` 关闭自动测速选最快节点（默认开启） |
-| `AUTO_FASTEST_MS` | 自动测速间隔，默认 `600000`（10 分钟） |
-
-订阅需要是 **Clash 格式**（含 `proxies:` 的 YAML）。机场常见的 ss / vmess / trojan / hysteria2 节点都由 mihomo 支持；纯 base64 的 v2ray 订阅会被自动解码一次。
-
-## 客户端接入
-
-```bash
-curl https://<your-app>.onrender.com/v1/chat/completions \
-  -H "Authorization: Bearer sk-robin-..." \
-  -H "Content-Type: application/json" \
-  -d '{"model":"web-gemini-4-neon","messages":[{"role":"user","content":"你好"}]}'
-```
-
-## API
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/health` | 健康检查 |
-| GET | `/v1/models` | 模型列表 |
-| POST | `/v1/chat/completions` | 聊天（流式/非流式） |
-| POST | `/admin/api/login` | 面板登录 |
-| GET | `/admin/api/overview` | 凭证、模型、统计 |
-| POST | `/admin/api/credentials/import-web-cookie` | 导入 Gemini Cookie |
-| POST | `/admin/api/credentials/:id/test` | 测试凭证 |
-| PATCH | `/admin/api/credentials/:id` | 备注 / 启停 |
-| DELETE | `/admin/api/credentials/:id` | 删除凭证 |
-| POST/GET | `/admin/api/keys` | API Key 管理 |
-| GET | `/admin/api/logs` | 最近日志 |
-
-## 环境变量
-
-| 变量 | 必需 | 说明 |
-|---|---|---|
-| `PORT` | 否 | 默认 8787 |
-| `DATA_DIR` | 否 | 默认 `./data`（Render 上建议 `/data`） |
-| `ADMIN_PASSWORD` | 推荐 | 面板密码；不设则随机生成并打印 |
-| `ENCRYPTION_KEY` | PaaS 必填 | 固定密钥，加密 Cookie |
-| `SESSION_SECRET` | 否 | 默认由 `ENCRYPTION_KEY` 派生 |
-| `GATEWAY_API_KEYS` | 否 | 预置 API key，逗号分隔 |
-| `CF_KV_API_TOKEN` / `CF_ACCOUNT_ID` / `CF_KV_NAMESPACE_ID` | 否 | Cloudflare KV 持久化 |
-| `LOG_REQUESTS` | 否 | 记录每个请求 |
+---
 
 ## 架构
 
 ```
-src/server.js      Express：OpenAI 兼容路由 + admin API + 静态面板
-src/credentials.js Cookie 导入、测试
-src/store.js       JSON + KV 持久化、加密、轮换计数
-src/googleweb.js   Gemini 网页版会话（at/bl、StreamGenerate、帧解析）
+src/server.js      Express：OpenAI 路由 + admin API + 静态面板
+src/googleweb.js   Gemini 网页版会话（at/bl、StreamGenerate、帧解析、动态探测）
+src/proxypool.js   mihomo 内核管理、Clash 订阅解析、测速/删除/自动切最快
+src/proxyroute.js  出站代理选择
+src/credentials.js Cookie 导入与测试
+src/store.js       JSON + KV 持久化、加密、统计
 src/translate.js   OpenAI ⇄ 内部结构、SSE chunk
 src/crypto.js      AES-256-GCM / scrypt / HMAC
 src/logger.js      内存环形日志
 public/admin/      单文件管理面板
+docs/              保姆级文档
 ```
+
+---
+
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| [docs/README.md](docs/README.md) | 总览 + 5 分钟快速开始 |
+| [docs/01-原理.md](docs/01-原理.md) | 协议细节、字段表、为什么这么做 |
+| [docs/02-部署.md](docs/02-部署.md) | Fork → KV → Render → 首次登录 → 验证（含网址说明） |
+| [docs/03-使用.md](docs/03-使用.md) | 取 Cookie、模型、API Key、客户端、代理池 |
+| [docs/04-常见问题.md](docs/04-常见问题.md) | 22 个常见报错与处置 |
+
+---
 
 ## 风险与合规
 
-- 这是非官方接口，Google 可能随时改动 `StreamGenerate` 的 payload/字段，需要跟着修。
-- 对话会出现在该账号的 Gemini 历史里；Cookie 等价账号网页权限，请只导入到自己的实例。
-- 请遵守 Google 服务条款；由此导致的账号限制/封禁由使用者自行承担。
+- 这是**非官方接口**，Google 随时可能改动 `StreamGenerate` 的字段/签名，需要跟着修。
+- 对话会出现在该账号的 Gemini 历史里；Cookie 等价账号网页权限，**只导入到你自己的实例**。
+- 请遵守 Google 服务条款。由此导致的账号限制/封禁由使用者自行承担。
+- 不要把实例公开给陌生人用，也不要做商业转售。
