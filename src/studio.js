@@ -32,7 +32,7 @@ export async function* streamStudioChat({ cookie, model, body, signal, tier, aut
   if (!prepared.ok) {
     throw new WaaError(
       `AI Studio Cookie 缺少必要字段（${prepared.missing.join(", ")}）：请从已登录的 aistudio.google.com 复制完整 Cookie。`,
-      { code: "studio_cookie_invalid", status: 400 },
+      { code: "pggo_cookie_invalid", status: 400 },
     );
   }
 
@@ -90,7 +90,7 @@ async function openUpstream({ prepared, wire, prompt, model, tier, authUser, sig
       });
     } catch (error) {
       throw new WaaError(explainWaaError(error), {
-        code: error.code || "studio_mint_failed",
+        code: error.code || "pggo_mint_failed",
         status: error.status || 502,
         retryable: error.retryable,
       });
@@ -118,7 +118,7 @@ async function openUpstream({ prepared, wire, prompt, model, tier, authUser, sig
       const cause = error.cause?.code || error.cause?.message || "";
       lastError = new WaaError(
         `could not reach AI Studio: ${error.message}${cause ? ` (${cause})` : ""}`,
-        { code: "studio_transport_error", status: 502 },
+        { code: "pggo_transport_error", status: 502 },
       );
       if (attempt < attempts && !signal?.aborted) {
         await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
@@ -132,7 +132,7 @@ async function openUpstream({ prepared, wire, prompt, model, tier, authUser, sig
     const detail = (await response.text().catch(() => "")).slice(0, 300).replace(/\s+/g, " ");
     const retryable = response.status === 429 || response.status >= 500;
     lastError = new WaaError(`AI Studio returned HTTP ${response.status}: ${detail || "no body"}`, {
-      code: response.status === 429 ? "studio_rate_limited" : retryable ? "studio_unavailable" : "studio_upstream_error",
+      code: response.status === 429 ? "pggo_rate_limited" : retryable ? "pggo_unavailable" : "pggo_upstream_error",
       status: response.status === 429 ? 429 : retryable ? 503 : 502,
     });
     if (retryable && attempt < attempts) {
@@ -141,7 +141,7 @@ async function openUpstream({ prepared, wire, prompt, model, tier, authUser, sig
     }
     throw lastError;
   }
-  throw lastError || new WaaError("AI Studio request failed", { code: "studio_failed", status: 502 });
+  throw lastError || new WaaError("AI Studio request failed", { code: "pggo_failed", status: 502 });
 }
 
 /** Aggregate a pggo chat into `{text, thoughts, usage, finishReason}`. */
