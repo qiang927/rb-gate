@@ -89,6 +89,18 @@
   .badge.error { color: var(--red); border-color: #4a2727; background: #1f1010; }
   .badge.disabled { color: var(--muted); }
   .badge.robin { color: #9db4ff; border-color: #2a3760; background: #121a30; }
+  .badge.tier-free { color: #9aa4b2; border-color: #2c3340; }
+  .badge.tier-pro { color: #7fd3ff; border-color: #1f4a5e; background: #0d1e27; }
+  .badge.tier-ultra { color: #d9a6ff; border-color: #4a2a67; background: #1c1026; }
+  .badge.tier-plus { color: #ffd479; border-color: #5c4620; background: #221a0c; }
+  .quota { display: flex; flex-direction: column; gap: 3px; min-width: 120px; }
+  .quota .qrow { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+  .quota .qrow b { width: 16px; color: var(--muted); font-weight: 500; }
+  .quota .qbar { position: relative; flex: 1; height: 5px; border-radius: 99px; background: #222936; overflow: hidden; }
+  .quota .qbar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 99px; background: var(--green); }
+  .quota .qbar i.warn { background: #e0b13c; }
+  .quota .qbar i.low { background: var(--red); }
+  .quota .qrow em { font-style: normal; color: var(--text); min-width: 34px; text-align: right; }
   .cred-group + .cred-group { margin-top: 20px; }
   .group-head { margin-bottom: 8px; }
   .group-head h4 { margin: 0 0 2px; font-size: 14px; }
@@ -509,6 +521,28 @@
     { id: "robin", title: "Gemini 网页版 Cookie", note: "浏览器 Cookie 直连，驱动 web-* 模型。" },
   ];
 
+  function tierBadge(cred) {
+    const raw = cred.tierLabel || "";
+    const cls = raw === "Ultra" ? "tier-ultra" : raw === "Pro" ? "tier-pro" : raw === "Plus" ? "tier-plus" : "tier-free";
+    const label = raw || (cred.tier ? cred.tier : "未知");
+    return `<span class="badge ${cls}">${esc(label)}</span>`;
+  }
+
+  function quotaCell(usage) {
+    if (!usage) return '<span class="muted">未检测</span>';
+    const row = (label, win) => {
+      if (!win || typeof win.remainingPercent !== "number") {
+        return `<div class="qrow"><b>${label}</b><span class="muted">—</span></div>`;
+      }
+      const left = Math.max(0, Math.min(100, win.remainingPercent));
+      const cls = left <= 10 ? "low" : left <= 30 ? "warn" : "";
+      const reset = win.resetsAt ? new Date(win.resetsAt) : null;
+      const tip = reset && !Number.isNaN(reset.getTime()) ? `重置 ${reset.toLocaleString("zh-CN", { hour12: false })}` : "";
+      return `<div class="qrow" title="${esc(tip)}"><b>${label}</b><div class="qbar"><i class="${cls}" style="width:${left}%"></i></div><em>${left}%</em></div>`;
+    };
+    return `<div class="quota">${row("5h", usage.fiveHour)}${row("7d", usage.weekly)}</div>`;
+  }
+
   function credRow(cred) {
     const cooling = cred.cooldownUntil && cred.cooldownUntil > Date.now();
     const statusText = cooling ? "冷却中" : cred.status || "active";
@@ -520,10 +554,8 @@
       </td>
       <td data-label="类型"><span class="badge robin">${cred.hasWebCookie ? "cookie" : esc(cred.type)}</span></td>
       <td data-label="状态"><span class="badge ${statusClass}">${statusText}</span></td>
-      <td data-label="项目 / 层级" class="small">
-        <div class="mono">${esc(cred.projectId || "—")}</div>
-        <div class="muted">${esc(cred.tier || "")}</div>
-      </td>
+      <td data-label="档位" class="small">${tierBadge(cred)}</td>
+      <td data-label="额度" class="small">${quotaCell(cred.usage)}</td>
       <td data-label="用量" class="small">
         <div>${cred.uses || 0} 次</div>
         <div class="muted">${esc(ago(cred.lastUsedAt))}</div>
@@ -534,6 +566,7 @@
       <td class="actions">
         <div class="row" style="gap:6px; flex-wrap:nowrap">
           <button data-act="test" data-id="${esc(cred.id)}">测试</button>
+          <button data-act="usage" data-id="${esc(cred.id)}">额度</button>
           <button data-act="toggle" data-id="${esc(cred.id)}" data-status="${esc(cred.status)}">${cred.status === "disabled" ? "启用" : "禁用"}</button>
           <button class="danger" data-act="delete" data-id="${esc(cred.id)}">删除</button>
         </div>
@@ -556,7 +589,7 @@
       const list = byGroup[group.id] || [];
       const body = list.length
         ? `<table class="cards">
-            <thead><tr><th>账号</th><th>类型</th><th>状态</th><th>项目 / 层级</th><th>用量</th><th>最近错误</th><th></th></tr></thead>
+            <thead><tr><th>账号</th><th>类型</th><th>状态</th><th>档位</th><th>额度</th><th>用量</th><th>最近错误</th><th></th></tr></thead>
             <tbody>${list.map(credRow).join("")}</tbody>
           </table>`
         : '<div class="empty small">这个组还没有凭证。</div>';
@@ -577,6 +610,13 @@
         const result = await api(`/admin/api/credentials/${encodeURIComponent(id)}/test`, { method: "POST" });
         const detail = `project=${result.projectId || "?"} tier=${result.tier || "?"}`;
         toast(`可用 · ${detail}`);
+        await loadOverview();
+      } else if (act === "usage") {
+        toast("查询额度中…");
+        const result = await api(`/admin/api/credentials/${encodeURIComponent(id)}/usage`, { method: "POST" });
+        const u = result.usage || {};
+        const fmt = (w) => (w && typeof w.remainingPercent === "number" ? `${w.remainingPercent}%` : "—");
+        toast(`档位 ${u.tier?.label || "?"} · 5h 剩余 ${fmt(u.fiveHour)} · 7d 剩余 ${fmt(u.weekly)}`);
         await loadOverview();
       } else if (act === "appsig") {
         const app = prompt("Android app 包名", "com.google.android.gms");
@@ -691,12 +731,13 @@
       return `<tr>
         <td data-label="模型" class="mono">${esc(model.id)}</td>
         <td data-label="名称" class="small">${esc(model.display_name || "")}</td>
+        <td data-label="官方档位" class="small muted">${esc(meta.required_tier || "—")}</td>
         <td data-label="状态" class="small">${state}</td>
         <td data-label="模式" class="small muted">${esc(String(meta.mode ?? "—"))}</td>
         <td data-label="延迟" class="small muted">${meta.latency_ms != null ? meta.latency_ms + " ms" : "—"}</td>
       </tr>`;
     }).join("");
-    wrap.innerHTML = `<table class="cards"><thead><tr><th>模型</th><th>名称</th><th>状态</th><th>模式</th><th>延迟</th></tr></thead><tbody>${rows}</tbody></table>`;
+    wrap.innerHTML = `<table class="cards"><thead><tr><th>模型</th><th>名称</th><th>官方档位</th><th>状态</th><th>模式</th><th>延迟</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
   async function changePassword() {
