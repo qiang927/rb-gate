@@ -89,6 +89,7 @@ Google 有时会把机房 IP（Render 等）判成「异常流量」，`gemini.g
 
 节点管理：
 
+- **自动测速**：启动约 20 秒后首次执行，之后每 10 分钟一次；每次测完自动切到延迟最低的可用节点（只切 selector，不重启内核），当前选择会标「最快」；
 - **测速全部**：并发探测每个节点到 `gstatic.com` 的延迟，结果按 ms 显示（绿/黄/红），中位延迟会在提示里给出；
 - **删除**：把节点从当前代理池剔除（会短暂重启 mihomo 内核），删除记录持久化，重启/重新部署后仍然生效；
 - **恢复**：重新「导入并启动」订阅即可清空删除记录，恢复全部节点。
@@ -101,6 +102,8 @@ Google 有时会把机房 IP（Render 等）判成「异常流量」，`gemini.g
 | `PROXY_PORT` | 本地 mixed 端口，默认 `7891` |
 | `PROXY_CONTROLLER_PORT` | mihomo 控制端口，默认 `9090`（仅监听 127.0.0.1） |
 | `WEB_PROXY` | 不想用订阅时，可直接指定一个 HTTP 代理（`http://user:pass@host:port`） |
+| `AUTO_FASTEST` | 设为 `0` 关闭自动测速选最快节点（默认开启） |
+| `AUTO_FASTEST_MS` | 自动测速间隔，默认 `600000`（10 分钟） |
 
 订阅需要是 **Clash 格式**（含 `proxies:` 的 YAML）。机场常见的 ss / vmess / trojan / hysteria2 节点都由 mihomo 支持；纯 base64 的 v2ray 订阅会被自动解码一次。
 
