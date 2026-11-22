@@ -145,7 +145,7 @@ https://<service-name>.onrender.com
 - 导入时服务端会调 `ListModels` + `GetAiStudioBenefitTier` 校验 Cookie，并读取账号档位（Free/Pro/Ultra）；模型清单以该账号的实际目录为准，不是写死的。
 - 上游是 AI Studio 的 MakerSuite 私有 RPC，需要容器里的 WAA（BotGuard）签名器：Docker 镜像自动带上（`WAA_SIGNER_PATH`），本地跑要指向 `waa-signer` 二进制。
 - 网页版与 AI Studio 的档位/额度互不相干；4 Argon 这类付费模型仍可能返回 `503 high demand`，以 AI Studio 页面为准。
-- 第一次调用要冷启动签名器（约 5–10 秒），再叠加模型思考时间，单次可能要 30–100 秒；之后热启动快得多。
+- 第一次调用要冷启动签名器（约 5–10 秒），再叠加模型思考时间，单次可能要 30–100 秒；之后热启动快得多。慢模型建议 `stream: true`，否则 Render 代理会在约 100 秒静默后断开。
 
 ---
 
