@@ -38,8 +38,8 @@ function writeJsonAtomic(file, value) {
 /** Credential channel: `robin` = Gemini web cookie, `aistudio` = AI Studio cookie. */
 export function credentialGroup(cred) {
   if (!cred) return "";
+  if (cred.type === "aistudio") return "pggo";
   if (cred.group) return cred.group;
-  if (cred.type === "aistudio") return "aistudio";
   return "robin";
 }
 
