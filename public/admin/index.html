@@ -141,6 +141,11 @@
     table.cards td.actions button { flex: 1 1 auto; }
     table.cards td .row { flex-wrap: wrap !important; }
     table.cards td.mono { overflow-wrap: anywhere; }
+    .settings-grid { grid-template-columns: 1fr; }
+    .input-row { flex-direction: column; }
+    .toolbar .search { max-width: none; flex: 1 1 100%; }
+    .node-grid { grid-template-columns: 1fr; max-height: 360px; }
+    .card-head { flex-wrap: wrap; }
   }
 </style>
 </head>
@@ -285,37 +290,49 @@
 
     <!-- settings -->
     <section id="tab-settings" class="hidden">
-      <div class="card" style="margin-top:14px">
-        <strong>代理池（Clash 订阅）</strong>
-        <p class="hint" style="margin-top:6px">
-          Google 对机房 IP 弹「异常流量」验证时，导入 Clash 订阅 URL：内置 mihomo 内核会在服务端拉起多节点代理，命中验证页自动换节点重试。
-        </p>
-        <div class="field"><label>订阅 URL（Clash 格式，可含 token）</label><input id="proxyUrl" placeholder="https://example.com/api/v1/client/subscribe?token=..." /></div>
-        <div class="row" style="margin-top:10px">
-          <button class="primary" id="proxyImportBtn">导入并启动</button>
-          <button id="proxyRotateBtn">换节点</button>
-          <button id="proxyStopBtn">停止</button>
-          <button id="proxyRefreshBtn">刷新</button>
-          <button id="proxyTestAllBtn">测速全部</button>
-        </div>
-        <div id="proxyStatus" class="hint" style="margin-top:10px">未启动。</div>
-        <div id="proxyNodes" class="grid cols-2" style="margin-top:10px"></div>
-      </div>
+      <div class="settings-grid">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <div class="card-title">代理池</div>
+              <div class="hint" style="margin-top:4px">Clash 订阅 · 内置 mihomo 内核 · 命中「异常流量」自动换节点</div>
+            </div>
+            <div id="proxyState" class="pill idle"><span class="dot"></span>未启动</div>
+          </div>
 
-      <div class="card" style="margin-top:14px">
-        <strong>管理员密码</strong>
-        <p class="hint" style="margin-top:6px" id="passwordHint">登录后可以随时修改密码（至少 8 位）。</p>
-        <div class="grid cols-2" style="margin-top:10px">
+          <div class="input-row">
+            <input id="proxyUrl" placeholder="https://example.com/api/v1/client/subscribe?token=..." />
+            <button class="primary" id="proxyImportBtn">导入并启动</button>
+          </div>
+
+          <div class="toolbar">
+            <button id="proxyTestAllBtn">测速全部</button>
+            <button id="proxyRotateBtn">换节点</button>
+            <button id="proxyRefreshBtn">刷新</button>
+            <button id="proxyStopBtn" class="ghost">停止</button>
+            <span class="spacer"></span>
+            <input id="proxySearch" class="search" placeholder="搜索节点…" />
+          </div>
+
+          <div id="proxyMeta" class="meta-row"></div>
+          <div id="proxyNodes" class="node-grid"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <div class="card-title">管理员密码</div>
+              <div class="hint" style="margin-top:4px" id="passwordHint">至少 8 位，修改后其他已登录会话不受影响。</div>
+            </div>
+          </div>
           <div class="field"><label>当前密码</label><input id="pwdCurrent" type="password" autocomplete="current-password" /></div>
           <div class="field"><label>新密码</label><input id="pwdNew" type="password" autocomplete="new-password" /></div>
-        </div>
-        <div class="field"><label>确认新密码</label><input id="pwdConfirm" type="password" autocomplete="new-password" /></div>
-        <div class="row" style="margin-top:10px">
-          <button class="primary" id="changePwdBtn">修改密码</button>
-          <span class="hint">修改后当前会话仍然有效，其他已登录会话不受影响。</span>
+          <div class="field"><label>确认新密码</label><input id="pwdConfirm" type="password" autocomplete="new-password" /></div>
+          <button class="primary block" id="changePwdBtn">修改密码</button>
         </div>
       </div>
     </section>
+
   </main>
 </div>
 
@@ -662,7 +679,8 @@
       const data = await api("/admin/api/proxy");
       renderProxy(data.proxy || {});
     } catch (error) {
-      $("proxyStatus").textContent = `加载代理状态失败：${error.message}`;
+      const state = $("proxyState");
+      if (state) { state.className = "pill err"; state.innerHTML = `<span class="dot"></span>${esc(error.message)}`; }
     }
   }
 
@@ -676,33 +694,65 @@
     return `<span class="badge" style="background:${color};color:${fg}">${ms} ms</span>`;
   }
 
+  let proxyLast = null;
+
   function renderProxy(proxy) {
-    const status = $("proxyStatus");
+    proxyLast = proxy;
+    const state = $("proxyState");
     if (proxy.running) {
-      const removed = proxy.removed ? ` · 已删除 ${proxy.removed} 个（重新导入订阅可恢复）` : "";
+      state.className = "pill ok";
+      state.innerHTML = '<span class="dot"></span>运行中';
+    } else if (proxy.error) {
+      state.className = "pill err";
+      state.innerHTML = '<span class="dot"></span>启动失败';
+    } else {
+      state.className = "pill idle";
+      state.innerHTML = '<span class="dot"></span>未启动';
+    }
+
+    const meta = $("proxyMeta");
+    if (proxy.running) {
       const fastest = proxy.fastest || {};
       const everyMin = Math.max(1, Math.round((fastest.intervalMs || 600000) / 60000));
-      const fastText = fastest.enabled
-        ? ` · 自动测速：每 ${everyMin} 分钟${fastest.lastAt ? `（上次选 ${fastest.node || "-"}）` : "（启动约 20 秒后首次执行）"}`
-        : " · 自动测速：已关闭";
-      status.textContent = `运行中 · ${proxy.nodes.length} 个节点 · 当前：${proxy.current || "-"} · 订阅：${proxy.subscriptionHost || "-"}${removed}${fastText}`;
+      meta.innerHTML = [
+        `<span>节点 <b>${(proxy.nodes || []).length}</b></span>`,
+        `<span>当前 <b>${esc(proxy.current || "—")}</b></span>`,
+        `<span>订阅 <b>${esc(proxy.subscriptionHost || "—")}</b></span>`,
+        proxy.removed ? `<span>已删除 <b>${proxy.removed}</b> 个</span>` : "",
+        `<span>自动测速 <b>${fastest.enabled ? `每 ${everyMin} 分钟` : "关闭"}</b>${fastest.lastAt ? `（上次 ${esc(fastest.node || "-")}）` : ""}</span>`,
+      ].filter(Boolean).join("");
     } else {
-      status.textContent = proxy.error ? `未运行（${proxy.error}）` : "未启动。";
+      meta.innerHTML = proxy.error ? `<span style="color:var(--red)">${esc(proxy.error)}</span>` : "";
     }
+
+    renderProxyNodes();
+  }
+
+  function renderProxyNodes() {
     const box = $("proxyNodes");
-    if (!proxy.running || !proxy.nodes?.length) {
+    const proxy = proxyLast;
+    if (!proxy || !proxy.running || !proxy.nodes?.length) {
       box.innerHTML = "";
       return;
     }
-    box.innerHTML = proxy.nodes.map((name) => `
-      <div class="row" style="justify-content:space-between;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px 10px">
-        <span class="mono small" style="word-break:break-all">${esc(name)}${name === proxy.current ? " · 当前" : ""}${(proxy.fastest && proxy.fastest.node === name) ? ' <span class="badge" style="background:#1d3a26;color:#8ef0b0">最快</span>' : ""}</span>
-        <span class="row" style="gap:6px;flex-shrink:0">
+    const keyword = ($("proxySearch").value || "").trim().toLowerCase();
+    const nodes = keyword ? proxy.nodes.filter((name) => name.toLowerCase().includes(keyword)) : proxy.nodes;
+    if (!nodes.length) {
+      box.innerHTML = '<div class="empty" style="grid-column:1/-1">没有匹配的节点。</div>';
+      return;
+    }
+    box.innerHTML = nodes.map((name) => {
+      const active = name === proxy.current;
+      const fastest = proxy.fastest && proxy.fastest.node === name;
+      return `<div class="node${active ? " active" : ""}">
+        <span class="name mono" title="${esc(name)}">${esc(name)}${active ? ' <span class="badge robin">当前</span>' : ""}${fastest ? ' <span class="badge active">最快</span>' : ""}</span>
+        <span class="actions">
           ${delayBadge(name)}
           <button data-proxy-node="${esc(name)}">使用</button>
-          <button data-proxy-remove="${esc(name)}" style="color:#ff9c9c">删除</button>
+          <button data-proxy-remove="${esc(name)}">删除</button>
         </span>
-      </div>`).join("");
+      </div>`;
+    }).join("");
   }
 
   // ---- events ----
@@ -762,6 +812,7 @@
     }
   });
   $("proxyRefreshBtn").addEventListener("click", loadProxy);
+  $("proxySearch").addEventListener("input", renderProxyNodes);
   $("probeModelsBtn").addEventListener("click", probeModels);
   $("proxyNodes").addEventListener("click", async (event) => {
     const removeBtn = event.target.closest("[data-proxy-remove]");
