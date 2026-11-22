@@ -438,6 +438,17 @@ class Store {
     cred.cooldownUntil = 0;
     this.persist("credentials", { credentials: this.credentials() }, { immediate: true });
   }
+
+  setCredentialUsage(id, usage) {
+    const cred = this.rawCredential(id);
+    if (!cred) return null;
+    cred.usage = usage || null;
+    cred.usageAt = new Date().toISOString();
+    if (usage?.tier?.raw) cred.tier = usage.tier.raw;
+    if (usage?.tier?.label) cred.tierLabel = usage.tier.label;
+    this.saveCredential(cred);
+    return cred;
+  }
 }
 
 export function randomHex(bytes) {
