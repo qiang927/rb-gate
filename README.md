@@ -107,18 +107,26 @@ https://<service-name>.onrender.com
 
 `GET /v1/models` 返回 5 个模型：
 
-| 模型 ID | 网页端档位 | 适合 |
-|---|---|---|
-| `web-gemini-4-hydrogen` | 4 Hydrogen | 日常问答，快 |
-| `web-gemini-4-neon` | 4 Neon | 深度分析 |
-| `web-gemini-4-carbon` | 4 Carbon | 代码 / 复杂任务 |
-| `web-gemini-4-auto` | 自动 | 让 Google 选 |
-| `web-gemini-4-flash-lite` | Flash-Lite | 极快、简单任务 |
+| 模型 ID | 网页端档位 | 最低账号档位 | 适合 |
+|---|---|---|---|
+| `web-gemini-4-hydrogen` | 4 Hydrogen | Free | 日常问答，快 |
+| `web-gemini-4-neon` | 4 Neon | Pro | 深度分析 |
+| `web-gemini-4-carbon` | 4 Carbon | Ultra | 代码 / 复杂任务 |
+| `web-gemini-4-auto` | 自动 | Free | 让 Google 选 |
+| `web-gemini-4-flash-lite` | Flash-Lite | Free | 极快、简单任务 |
+
+`GET /v1/models` 的 `metadata.required_tier` 会带上最低档位，方便客户端自己判断。
 
 网页端没有公开的模型列表接口，所谓“动态读取”是**面板逐个档位发 ping**：
 
 - 面板「模型」→ **动态探测**（约 10–20 秒）；
 - 结果写进 `/v1/models` 的 `metadata.available` / `latency_ms` / `checked_at`。
+
+面板还会自动检测每个账号的**档位与额度**（5 小时窗口 / 7 天窗口，见「凭证 → 额度」）：
+
+- 档位来自 Google 网页端的 `subscriptionTier`（TIER0=Plus、TIER1=Pro、TIER2=Ultra）；
+- 5h / 7d 剩余百分比来自网页端用量接口，聊天成功后每 10 分钟自动刷新；
+- 某个账号额度耗尽会自动跳过，优先用还有额度的；全耗尽才回退。
 
 旧 ID（`web-gemini-3.7-flash` 等）已删除，用旧名会 404。
 
@@ -129,6 +137,7 @@ https://<service-name>.onrender.com
 - **OpenAI 兼容**：`POST /v1/chat/completions`（流式/非流式）、`GET /v1/models`；支持 system、多轮、`stream_options.include_usage`。
 - **多凭证轮换**：Cookie 导入前验证；按最久未用优先；失败自动冷却并换号。
 - **动态模型探测**：确认此刻哪个档位真正可用。
+- **档位 / 额度自动检测**：Pro / Ultra / Plus / Free、5h 与 7d 剩余额度、模型所需档位；额度耗尽的账号自动跳过。
 - **Clash 代理池**：内置 mihomo 内核，导入订阅即用；测速、删除节点、每 10 分钟自动切最快；命中 `/sorry` 自动换节点重试。
 - **管理面板**：凭证、API Keys、模型、日志、密码、代理池；桌面/手机自适应。
 - **零数据库**：JSON + 原子写；Cookie AES-256-GCM 加密；admin 密码 scrypt。
