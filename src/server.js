@@ -18,6 +18,7 @@ import {
 } from "./translate.js";
 import { generateContent } from "./upstream.js";
 import { logError, logInfo, logWarn, recentLogs } from "./logger.js";
+import { initProxyPool, isAbuseBlock, proxyPool } from "./proxypool.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -222,6 +223,23 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
   }
 
   const { generator, first } = opened;
+  // Pull the first frame before flushing SSE headers so auth/abuse failures can
+  // still be answered with a normal JSON error (and retried on another node).
+  let iterator = null;
+  let firstStep = null;
+  try {
+    firstStep = await withAbuseRetry(async () => {
+      const candidate = session.chat(prompt, { model, temporary })[Symbol.asyncIterator]();
+      const first = await candidate.next();
+      iterator = candidate;
+      return first;
+    });
+  } catch (error) {
+    if (controller.signal.aborted) return res.end();
+    logError(`web chat failed (${error.status || 502}): ${error.message}`);
+    return sendOpenaiError(res, error.status || 502, error.message, { type: "web_error", code: error.code || "web_failed" });
+  }
+
   const id = `chatcmpl-${crypto.randomBytes(12).toString("hex")}`;
   const created = Math.floor(Date.now() / 1000);
   res.writeHead(200, openaiSseHeaders());
@@ -347,9 +365,21 @@ async function handleWebChat(req, res, body, model, stream) {
   const controller = new AbortController();
   res.on("close", () => controller.abort(new Error("client closed the connection")));
 
+  const withAbuseRetry = async (fn) => {
+    try {
+      return await fn();
+    } catch (error) {
+      if (!isAbuseBlock(error) || proxyPool.nodes.length < 2) throw error;
+      const next = await proxyPool.rotate().catch(() => "");
+      if (!next) throw error;
+      logWarn(`web: abuse page from Google, switched proxy node to ${next}`);
+      return await fn();
+    }
+  };
+
   if (!stream) {
     try {
-      const text = await session.complete(prompt, { model, temporary });
+      const text = await withAbuseRetry(() => session.complete(prompt, { model, temporary }));
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       return res.json(buildOpenaiResponse({ text, model, toolCalls: [] }));
     } catch (error) {
@@ -366,13 +396,16 @@ async function handleWebChat(req, res, body, model, stream) {
   const send = (chunk) => res.write(`data: ${JSON.stringify(chunk)}\n\n`);
   let wroteRole = false;
   try {
-    for await (const delta of session.chat(prompt, { model, temporary })) {
+    let step = firstStep;
+    while (step && !step.done) {
       if (controller.signal.aborted) break;
+      const delta = step.value;
       if (!wroteRole) {
         send(buildOpenaiChunk({ id, model, created, delta: { role: "assistant" } }));
         wroteRole = true;
       }
       send(buildOpenaiChunk({ id, model, created, delta: { content: delta } }));
+      step = await iterator.next();
     }
     send(buildOpenaiChunk({ id, model, created, delta: {}, finishReason: "stop" }));
     if (body.stream_options?.include_usage) {
@@ -492,6 +525,57 @@ app.post("/admin/api/web/probe", requireAdmin, async (req, res) => {
   }
 });
 
+app.get("/admin/api/proxy", requireAdmin, (req, res) => {
+  res.json({ ok: true, proxy: proxyPool.status() });
+});
+
+app.post("/admin/api/proxy/import", requireAdmin, async (req, res) => {
+  const url = String(req.body?.url || "").trim();
+  if (!url) return res.status(400).json({ ok: false, error: "缺少订阅 URL" });
+  try {
+    const status = await proxyPool.start(url);
+    store.updateSettings({ proxySubscription: url });
+    logInfo(`proxy pool: imported ${status.nodes.length} nodes`);
+    res.json({ ok: true, proxy: status });
+  } catch (error) {
+    logWarn(`proxy pool import failed: ${error.message}`);
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/admin/api/proxy/select", requireAdmin, async (req, res) => {
+  try {
+    const status = await proxyPool.select(String(req.body?.name || ""));
+    res.json({ ok: true, proxy: status });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/admin/api/proxy/rotate", requireAdmin, async (req, res) => {
+  try {
+    const name = await proxyPool.rotate();
+    res.json({ ok: true, node: name, proxy: proxyPool.status() });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/admin/api/proxy/test", requireAdmin, async (req, res) => {
+  try {
+    const result = await proxyPool.testNode(String(req.body?.name || ""));
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/admin/api/proxy/stop", requireAdmin, async (req, res) => {
+  await proxyPool.stop();
+  store.updateSettings({ proxySubscription: "" });
+  res.json({ ok: true, proxy: proxyPool.status() });
+});
+
 app.get("/admin/api/overview", requireAdmin, (req, res) => {
   const credentials = store.listCredentials();
   const stats = {
@@ -514,6 +598,7 @@ app.get("/admin/api/overview", requireAdmin, (req, res) => {
       requestTimeoutMs: config.requestTimeoutMs,
       maxRetries: config.maxRetries,
       cooldownMs: config.cooldownMs,
+      proxy: proxyPool.status(),
     },
     initialPassword: store.admin().generated ? store.admin().plaintextOnce || "" : "",
   });
@@ -586,6 +671,7 @@ app.use((error, req, res, next) => {
 });
 
 await store.init();
+void initProxyPool();
 
 const server = app.listen(config.port, config.host, () => {
   const admin = store.admin();
@@ -624,6 +710,7 @@ function shutdown(signal) {
     /* ignore */
   }
   server.close(() => {
+    void proxyPool.stop().catch(() => {});
     void store.flush().finally(() => process.exit(0));
   });
   setTimeout(() => process.exit(0), 5000).unref();
