@@ -57,7 +57,10 @@
   textarea { resize: vertical; min-height: 70px; }
   label { display: block; color: var(--muted); font-size: 12px; margin: 0 0 4px; }
   .field { margin-bottom: 12px; }
-  .wrap { max-width: 1120px; margin: 0 auto; padding: 28px 20px 80px; }
+  .wrap { max-width: 1440px; margin: 0 auto; padding: 28px 24px 80px; }
+  .creds-grid { display: grid; grid-template-columns: 390px minmax(0, 1fr); gap: 16px; align-items: start; }
+  .models-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 1180px) { .creds-grid, .models-grid { grid-template-columns: 1fr; } }
   header.top { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; flex-wrap: wrap; }
   .logo { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, #7c9cff, #46c98b); display: grid; place-items: center; font-weight: 800; color: #091018; }
   header.top h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: .2px; }
@@ -250,7 +253,7 @@
 
     <!-- credentials -->
     <section id="tab-credentials">
-      <div class="grid cols-2">
+      <div class="creds-grid">
         <div class="card">
           <div class="row" style="justify-content:space-between; margin-bottom:8px">
             <strong>Gemini 网页版 Cookie</strong>
@@ -270,15 +273,14 @@
           </div>
         </div>
 
-      </div>
-
-      <div class="card" style="margin-top:14px">
-        <div class="row" style="justify-content:space-between; margin-bottom:6px">
-          <strong>凭证池</strong>
-          <button class="ghost" id="refreshCreds">刷新</button>
-        </div>
-        <div id="credsTableWrap">
-          <div class="empty">加载中…</div>
+        <div class="card">
+          <div class="row" style="justify-content:space-between; margin-bottom:6px">
+            <strong>凭证池</strong>
+            <button class="ghost" id="refreshCreds">刷新</button>
+          </div>
+          <div id="credsTableWrap">
+            <div class="empty">加载中…</div>
+          </div>
         </div>
       </div>
     </section>
@@ -300,6 +302,7 @@
 
     <!-- models -->
     <section id="tab-models" class="hidden">
+      <div class="models-grid">
       <div class="card">
         <strong>模型清单</strong>
         <p class="hint">本部署只提供 Gemini 网页版通道的 5 个模型（<code>web-gemini-4-*</code>）。模型名在 <code>/v1/models</code> 里带 <code>metadata.available</code>。</p>
@@ -312,6 +315,7 @@
         </div>
         <p class="hint">Gemini 网页端没有公开的模型列表接口，唯一可靠的办法是用已导入的 Cookie 给每个预设发一句 ping：能回就代表此刻可用。检测走代理池，逐个进行，耗时约 10–60 秒。</p>
         <div id="webModelsWrap"><div class="empty">未检测</div></div>
+      </div>
       </div>
     </section>
 
