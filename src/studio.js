@@ -44,10 +44,29 @@ export async function* streamStudioChat({ cookie, model, body, signal, tier, aut
   // split between two network chunks, and per-chunk toString() would corrupt it.
   const utf8 = new StringDecoder("utf8");
   const decoder = new FrameStream();
+  let raw = "";
+  let frames = 0;
+  let textLength = 0;
+  let finishReason = null;
+  let usage = null;
   for await (const chunk of response.body) {
-    for (const frame of decoder.push(utf8.write(Buffer.from(chunk)))) {
+    const piece = utf8.write(Buffer.from(chunk));
+    if (raw.length < 4000) raw += piece;
+    for (const frame of decoder.push(piece)) {
+      frames += 1;
+      if (frame.text) textLength += frame.text.length;
+      if (frame.finishReason !== null && frame.finishReason !== undefined) finishReason = frame.finishReason;
+      if (frame.usage) usage = frame.usage;
       yield frame;
     }
+  }
+  if (textLength === 0) {
+    // The RPC can answer 200 with frames that carry no text (max tokens spent
+    // on thoughts, safety block, or an error frame). Keep enough of the raw
+    // body in the logs to tell those cases apart.
+    console.error(
+      `[studio] empty response model=${model.id} frames=${frames} finish=${finishReason} usage=${JSON.stringify(usage)} raw=${JSON.stringify(raw.slice(0, 600))}`,
+    );
   }
 }
 
