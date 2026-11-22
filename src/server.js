@@ -223,23 +223,6 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
   }
 
   const { generator, first } = opened;
-  // Pull the first frame before flushing SSE headers so auth/abuse failures can
-  // still be answered with a normal JSON error (and retried on another node).
-  let iterator = null;
-  let firstStep = null;
-  try {
-    firstStep = await withAbuseRetry(async () => {
-      const candidate = session.chat(prompt, { model, temporary })[Symbol.asyncIterator]();
-      const first = await candidate.next();
-      iterator = candidate;
-      return first;
-    });
-  } catch (error) {
-    if (controller.signal.aborted) return res.end();
-    logError(`web chat failed (${error.status || 502}): ${error.message}`);
-    return sendOpenaiError(res, error.status || 502, error.message, { type: "web_error", code: error.code || "web_failed" });
-  }
-
   const id = `chatcmpl-${crypto.randomBytes(12).toString("hex")}`;
   const created = Math.floor(Date.now() / 1000);
   res.writeHead(200, openaiSseHeaders());
@@ -388,6 +371,23 @@ async function handleWebChat(req, res, body, model, stream) {
       logError(`web chat failed (${status}): ${error.message}`);
       return sendOpenaiError(res, status, error.message, { type: "web_error", code: error.code || "web_failed" });
     }
+  }
+
+  // Pull the first frame before flushing SSE headers so auth/abuse failures can
+  // still be answered with a normal JSON error (and retried on another node).
+  let iterator = null;
+  let firstStep = null;
+  try {
+    firstStep = await withAbuseRetry(async () => {
+      const candidate = session.chat(prompt, { model, temporary })[Symbol.asyncIterator]();
+      const first = await candidate.next();
+      iterator = candidate;
+      return first;
+    });
+  } catch (error) {
+    if (controller.signal.aborted) return res.end();
+    logError(`web chat failed (${error.status || 502}): ${error.message}`);
+    return sendOpenaiError(res, error.status || 502, error.message, { type: "web_error", code: error.code || "web_failed" });
   }
 
   const id = `chatcmpl-${crypto.randomBytes(12).toString("hex")}`;
