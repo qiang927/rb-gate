@@ -637,7 +637,7 @@ async function handleStudioChat(req, res, body, modelId, stream) {
         ensureRole();
         send(buildOpenaiChunk({ id, model: modelId, created, delta: { reasoning_content: frame.thoughts } }));
       }
-      step = await iterator.next();
+      step = await candidate.next();
     }
     ensureRole();
     store.markUsed(credential.id);
