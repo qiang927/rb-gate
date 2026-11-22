@@ -278,17 +278,17 @@
 
         <div class="card">
           <div class="row" style="justify-content:space-between; margin-bottom:8px">
-            <strong>AI Studio Cookie</strong>
-            <span class="badge robin">studio-* 直连</span>
+            <strong>pggo（AI Studio Cookie）</strong>
+            <span class="badge robin">pggo-* 直连</span>
           </div>
           <p class="hint">
             粘贴浏览器里 <code>aistudio.google.com</code> 的 Cookie（<strong>不是</strong> gemini.google.com 的）。
-            走 Google AI Studio 的 MakerSuite 私有 RPC，需要服务端 WAA 签名器生成 BotGuard 证明；
+            pggo = 邮箱 + AI Studio Cookie + 服务端 WAA 签名：用 MakerSuite 私有 RPC 生成 BotGuard 证明后直接出字；
             导入时会自动校验登录态，并读取该账号的档位（Free/Pro/Ultra）与真实可用模型。
           </p>
           <div class="field"><label>Google 邮箱（可选）</label><input id="aiStudioEmail" type="email" placeholder="you@gmail.com" /></div>
           <div class="field"><label>Cookie</label><textarea id="aiStudioCookie" placeholder="SID=…; __Secure-1PSID=…; SAPISID=…" spellcheck="false" style="min-height:110px"></textarea></div>
-          <div class="field"><label>备注（可选）</label><input id="aiStudioLabel" placeholder="AI Studio 主号" /></div>
+          <div class="field"><label>备注（可选）</label><input id="aiStudioLabel" placeholder="pggo 主号" /></div>
           <div class="row">
             <button class="primary" id="importAiStudioBtn">验证并导入</button>
             <span class="hint">导入时会查一次 ListModels / BenefitTier</span>
@@ -328,7 +328,7 @@
       <div class="models-grid">
       <div class="card">
         <strong>模型清单</strong>
-        <p class="hint">Gemini 网页版固定 5 个 <code>web-gemini-4-*</code>；导入 AI Studio Cookie 后，这里还会出现该账号真实可用的 <code>studio-*</code> 模型。</p>
+        <p class="hint">Gemini 网页版固定 5 个 <code>web-gemini-4-*</code>；导入 pggo（AI Studio Cookie）后，这里还会出现该账号真实可用的 <code>pggo-*</code> 模型。</p>
         <div id="modelsTableWrap"><div class="empty">加载中…</div></div>
       </div>
       <div class="card">
@@ -546,7 +546,7 @@
 
   const CRED_GROUPS = [
     { id: "robin", title: "Gemini 网页版 Cookie", note: "浏览器 Cookie 直连，驱动 web-* 模型。" },
-    { id: "aistudio", title: "AI Studio Cookie", note: "MakerSuite RPC + 服务端 WAA 签名，驱动 studio-* 模型。" },
+    { id: "pggo", title: "pggo（AI Studio Cookie）", note: "MakerSuite RPC + 服务端 WAA 签名，驱动 pggo-* 模型。" },
   ];
 
   function tierBadge(cred) {
@@ -580,7 +580,7 @@
         <div><strong>${esc(cred.label || cred.email || cred.id)}</strong></div>
         <div class="small muted">${esc(cred.email || "")}</div>
       </td>
-      <td data-label="类型"><span class="badge robin">${cred.group === "aistudio" ? "AI Studio" : cred.hasWebCookie ? "cookie" : esc(cred.type)}</span></td>
+      <td data-label="类型"><span class="badge robin">${cred.group === "aistudio" || cred.group === "pggo" ? "pggo" : cred.hasWebCookie ? "cookie" : esc(cred.type)}</span></td>
       <td data-label="状态"><span class="badge ${statusClass}">${statusText}</span></td>
       <td data-label="档位" class="small">${tierBadge(cred)}</td>
       <td data-label="额度" class="small">${quotaCell(cred.usage)}</td>
@@ -605,12 +605,12 @@
   function renderCredentials(creds) {
     const wrap = $("credsTableWrap");
     if (!creds.length) {
-      wrap.innerHTML = '<div class="empty">还没有凭证。在上方粘贴 Gemini 网页版或 AI Studio 的 Cookie 导入。</div>';
+      wrap.innerHTML = '<div class="empty">还没有凭证。在上方粘贴 Gemini 网页版或 pggo（AI Studio）的 Cookie 导入。</div>';
       return;
     }
-    const byGroup = { robin: [], aistudio: [] };
+    const byGroup = { robin: [], pggo: [] };
     for (const cred of creds) {
-      const group = cred.group === "aistudio" ? "aistudio" : "robin";
+      const group = cred.group === "aistudio" || cred.group === "pggo" ? "pggo" : "robin";
       byGroup[group].push(cred);
     }
     wrap.innerHTML = CRED_GROUPS.map((group) => {
@@ -759,7 +759,7 @@
       return `<tr>
         <td data-label="模型" class="mono">${esc(model.id)}</td>
         <td data-label="名称" class="small">${esc(model.display_name || "")}</td>
-        <td data-label="通道" class="small muted">${esc((model.groups || []).includes("aistudio") ? "AI Studio" : "web")}</td>
+        <td data-label="通道" class="small muted">${esc((model.groups || []).includes("pggo") || (model.groups || []).includes("aistudio") ? "pggo" : "web")}</td>
         <td data-label="官方档位" class="small muted">${esc(meta.required_tier || "—")}</td>
         <td data-label="状态" class="small">${state}</td>
         <td data-label="模式" class="small muted">${esc(String(meta.mode ?? "—"))}</td>
@@ -1008,7 +1008,7 @@
     btn.disabled = true;
     btn.textContent = "验证中…";
     try {
-      const result = await api("/admin/api/credentials/import-aistudio", {
+      const result = await api("/admin/api/credentials/import-pggo", {
         method: "POST",
         body: JSON.stringify({
           email: $("aiStudioEmail").value.trim(),
@@ -1017,7 +1017,7 @@
         }),
       });
       $("aiStudioCookie").value = "";
-      toast(`AI Studio 有效：${result.account.tier}，${result.account.models.length} 个模型可用`);
+      toast(`pggo 有效：${result.account.tier}，${result.account.models.length} 个模型可用`);
       await loadOverview();
     } catch (error) {
       toast(error.message, true);
