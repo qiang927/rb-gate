@@ -221,13 +221,9 @@ class Store {
       }));
       return this.apiKeyCache;
     }
-    let data = readJson(path.join(config.dataDir, FILES["api-keys"]), null);
-    if (!data || !Array.isArray(data.keys) || data.keys.length === 0) {
-      const key = `sk-robin-${randomToken(24)}`;
-      data = { keys: [{ id: randomId("key"), name: "default", key, hash: sha256(key), createdAt: new Date().toISOString() }] };
-      this.persist("api-keys", data, { immediate: true });
-    }
-    this.apiKeyCache = data.keys;
+    const data = readJson(path.join(config.dataDir, FILES["api-keys"]), null);
+    // No default key: an empty list means /v1 is closed until the operator adds one.
+    this.apiKeyCache = data && Array.isArray(data.keys) ? data.keys : [];
     return this.apiKeyCache;
   }
 
