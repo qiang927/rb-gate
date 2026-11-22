@@ -1,4 +1,5 @@
 import https from "node:https";
+import { StringDecoder } from "node:string_decoder";
 import crypto from "node:crypto";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { config } from "./config.js";
@@ -349,6 +350,7 @@ export class GoogleWebSession {
       throw new WebError(`StreamGenerate failed (${res.statusCode}): ${detail.slice(0, 200)}`, { code: "upstream_failed", retryable: true });
     }
 
+    const decoder = new StringDecoder("utf8");
     let buffer = "";
     let last = "";
     const consume = function* (line) {
@@ -372,7 +374,7 @@ export class GoogleWebSession {
     };
 
     for await (const chunk of res) {
-      buffer += chunk;
+      buffer += decoder.write(chunk);
       let idx;
       while ((idx = buffer.indexOf("\n")) >= 0) {
         const line = buffer.slice(0, idx);
@@ -380,6 +382,7 @@ export class GoogleWebSession {
         yield* consume(line);
       }
     }
+    buffer += decoder.end();
     if (buffer.trim()) yield* consume(buffer);
   }
 
