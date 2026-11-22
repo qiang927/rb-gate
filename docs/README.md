@@ -9,7 +9,7 @@
 两条通道：
 
 - **Gemini 网页版**（`web-*`）：浏览器 Cookie 直连 `gemini.google.com`，对话会进你自己的 Gemini 网页/客户端；
-- **AI Studio**（`studio-*`）：`aistudio.google.com` 的 Cookie + 服务端 WAA 签名器，走 MakerSuite 私有 RPC，模型清单由账号实际权限决定。
+- **AI Studio**（`pggo-*`）：`aistudio.google.com` 的 Cookie + 服务端 WAA 签名器，走 MakerSuite 私有 RPC，模型清单由账号实际权限决定。
 
 它**不是**：
 
