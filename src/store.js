@@ -70,6 +70,7 @@ class Store {
     this._sessionSecret = "";
     this.remote = false;
     this.pending = {};
+    this.remoteLoaded = new Set();
     this.timers = {};
   }
 
@@ -119,6 +120,7 @@ class Store {
       return;
     }
     this.remote = true;
+    this.remoteLoaded = new Set();
     logInfo(`store: Cloudflare KV mode (namespace ${config.kv.namespaceId.slice(0, 8)}…)`);
     for (const name of Object.keys(FILES)) {
       try {
@@ -127,10 +129,12 @@ class Store {
           const data = JSON.parse(raw);
           this.applyRemote(name, data);
           this.mirrorLocal(name, data);
+          this.remoteLoaded.add(name);
         } else {
           const local = this.snapshot(name);
           if (local) {
             await kvPut(KV_KEYS[name], JSON.stringify(local));
+            this.remoteLoaded.add(name);
             logInfo(`store: migrated ${name} to KV`);
           }
         }
@@ -166,7 +170,9 @@ class Store {
   /** Write-through: local file mirror + (debounced) KV push. */
   persist(name, data, { immediate = false } = {}) {
     this.mirrorLocal(name, data);
-    if (this.remote) this.scheduleRemote(name, data, immediate ? 0 : 400);
+    // Never clobber a KV record we failed to read during init: a transient KV
+    // error must not let in-memory defaults overwrite the real settings.
+    if (this.remote && this.remoteLoaded.has(name)) this.scheduleRemote(name, data, immediate ? 0 : 400);
   }
 
   scheduleRemote(name, data, delayMs = 400) {
