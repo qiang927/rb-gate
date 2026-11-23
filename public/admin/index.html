@@ -337,7 +337,7 @@
       <div class="models-grid">
       <div class="card">
         <strong>模型清单</strong>
-        <p class="hint">Gemini 网页版固定 5 个 <code>web-gemini-4-*</code>；导入 pggo（AI Studio Cookie）后，这里还会出现该账号真实可用的 <code>pggo-*</code> 模型。</p>
+        <p class="hint">Gemini 网页版固定 5 个 <code>web-gemini-4-*</code>，每个都支持三档思维强度（low / medium / high）：请求里带 <code>reasoning_effort</code>，或把模型名写成 <code>web-gemini-4-neon@think=high</code>。导入 pggo（AI Studio Cookie）后，这里还会出现该账号真实可用的 <code>pggo-*</code> 模型。</p>
         <div id="modelsTableWrap"><div class="empty">加载中…</div></div>
       </div>
       <div class="card">
@@ -772,10 +772,11 @@
         <td data-label="官方档位" class="small muted">${esc(meta.required_tier || "—")}</td>
         <td data-label="状态" class="small">${state}</td>
         <td data-label="模式" class="small muted">${esc(String(meta.mode ?? "—"))}</td>
+        <td data-label="思维强度" class="small muted">${esc(Array.isArray(meta.thinking_levels) && meta.thinking_levels.length ? meta.thinking_levels.map((level) => ({ low: "低", medium: "中", high: "高" }[level] || level)).join(" / ") : "—")}</td>
         <td data-label="延迟" class="small muted">${meta.latency_ms != null ? meta.latency_ms + " ms" : "—"}</td>
       </tr>`;
     }).join("");
-    wrap.innerHTML = `<table class="cards"><thead><tr><th>模型</th><th>名称</th><th>通道</th><th>官方档位</th><th>状态</th><th>模式</th><th>延迟</th></tr></thead><tbody>${rows}</tbody></table>`;
+    wrap.innerHTML = `<table class="cards"><thead><tr><th>模型</th><th>名称</th><th>通道</th><th>官方档位</th><th>状态</th><th>模式</th><th>思维强度</th><th>延迟</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
   async function changePassword() {

@@ -4,7 +4,7 @@ import express from "express";
 import { config, ensureConfigWarnings } from "./config.js";
 import { importAistudio, importWebCookie, testCredential } from "./credentials.js";
 import { UpstreamError } from "./google.js";
-import { GoogleWebSession, WEB_MODELS, fetchWebUsage, isWebModel, probeWebCookie, probeWebModels, requiredTierForModel } from "./googleweb.js";
+import { GoogleWebSession, THINKING_LEVELS, WEB_MODELS, fetchWebUsage, isWebModel, probeWebCookie, probeWebModels, requiredTierForModel, splitWebModelId, thinkingFromBody } from "./googleweb.js";
 import { decryptString } from "./crypto.js";
 import { isStudioModel, listStudioModels, lookupStudioModel, studioRequiredTier } from "./aistudio.js";
 import { completeStudioChat, streamStudioChat } from "./studio.js";
@@ -141,6 +141,7 @@ function webModelEntries() {
       metadata: {
         mode: cfg.mode,
         required_tier: requiredTierForModel(id),
+        thinking_levels: THINKING_LEVELS,
         available: hit ? hit.ok : null,
         latency_ms: hit ? hit.ms : null,
         checked_at: webModelsCache ? webModelsCache.checkedAt : null,
@@ -209,12 +210,13 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
   }
   const stream = Boolean(body.stream);
   if (isStudioModel(body.model)) return handleStudioChat(req, res, body, body.model, stream);
-  if (!isWebModel(body.model)) {
-    return sendOpenaiError(res, 404, `model ${body.model || "(missing)"} is not available; only web-* models are served by this deployment`, {
+  const web = splitWebModelId(body.model);
+  if (!isWebModel(web.model)) {
+    return sendOpenaiError(res, 404, `model ${body.model || "(missing)"} is not available; web models look like web-gemini-4-neon (append @think=low|medium|high to pick a thinking level)`, {
       code: "model_not_found",
     });
   }
-  return handleWebChat(req, res, body, body.model, stream);
+  return handleWebChat(req, res, body, web.model, stream, web.thinking || thinkingFromBody(body));
 
   const controller = new AbortController();
   res.on("close", () => controller.abort(new Error("client closed the connection")));
@@ -427,7 +429,7 @@ function webPrompt(messages) {
   return parts.join("\n\n");
 }
 
-async function handleWebChat(req, res, body, model, stream) {
+async function handleWebChat(req, res, body, model, stream, thinking = null) {
   const cred = findWebCredential();
   if (!cred) {
     return sendOpenaiError(res, 503, "no web credential: import a robin credential (oauth_token) first", { code: "no_web_credential" });
@@ -452,7 +454,7 @@ async function handleWebChat(req, res, body, model, stream) {
 
   if (!stream) {
     try {
-      const text = await withAbuseRetry(() => session.complete(prompt, { model, temporary }));
+      const text = await withAbuseRetry(() => session.complete(prompt, { model, temporary, thinking }));
       store.markUsed(cred.id);
       store.markOk(cred.id);
       scheduleUsageRefresh(cred);
@@ -473,7 +475,7 @@ async function handleWebChat(req, res, body, model, stream) {
   let firstStep = null;
   try {
     firstStep = await withAbuseRetry(async () => {
-      const candidate = session.chat(prompt, { model, temporary })[Symbol.asyncIterator]();
+      const candidate = session.chat(prompt, { model, temporary, thinking })[Symbol.asyncIterator]();
       const first = await candidate.next();
       iterator = candidate;
       return first;

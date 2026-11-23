@@ -2,7 +2,7 @@
 
 把 **Gemini 网页版会话**包装成 **OpenAI 兼容 API** 的自托管网关。带管理面板、多账号轮换、Clash 代理池，可一键部署到 Render。
 
-- 5 个网页版模型：`web-gemini-4-hydrogen` / `-neon` / `-carbon` / `-auto` / `-flash-lite`
+- 5 个网页版模型：`web-gemini-4-hydrogen` / `-neon` / `-carbon` / `-auto` / `-flash-lite`，每个都支持 low / medium / high 三档思维强度
 - 用你自己的 Google 账号，**不需要** Gemini API Key
 - 一个二进制/一个容器，无数据库
 - 有手就行 → **[保姆级部署文档](docs/02-部署.md)**
@@ -41,6 +41,7 @@ robin-gateway（Render / 本地）
   │         inner[17] = 思考等级（think）
   │         inner[41] = 历史模式（2 持久 / 1 临时）
   │         inner[79] = mode → 决定模型档位
+  │         inner[80] = 思维强度 1=低 2=中 3=高（不传用默认）
   │            1=Hydrogen  2=Neon  3=Carbon  4=Auto  6=Flash-Lite
   │         ← SSE 帧流 → 解析出增量文本
   │
@@ -115,7 +116,17 @@ https://<service-name>.onrender.com
 | `web-gemini-4-auto` | 自动 | Free | 让 Google 选 |
 | `web-gemini-4-flash-lite` | Flash-Lite | Free | 极快、简单任务 |
 
-`GET /v1/models` 的 `metadata.required_tier` 会带上最低档位，方便客户端自己判断。
+`GET /v1/models` 的 `metadata.required_tier` 会带上最低档位，`metadata.thinking_levels` 会带上三档思维强度，方便客户端自己判断。
+
+### 思维强度
+
+每个 `web-*` 档位都能再选 low / medium / high：
+
+```json
+{"model": "web-gemini-4-neon", "reasoning_effort": "high", "messages": [{"role": "user", "content": "..."}]}
+```
+
+也可以把强度写进模型名（适合只能填模型名的客户端）：`web-gemini-4-neon@think=high`。后缀优先于 `reasoning_effort`；两者都不传时网关不设置该字段，由 Google 用档位默认值。详见 [docs/03-使用.md](docs/03-使用.md#思维强度low--medium--high)。
 
 网页端没有公开的模型列表接口，所谓“动态读取”是**面板逐个档位发 ping**：
 

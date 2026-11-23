@@ -29,6 +29,82 @@ export function isWebModel(id) {
   return Boolean(WEB_MODELS[id]);
 }
 
+/** The three thinking strengths the Gemini web client exposes per preset. */
+export const THINKING_LEVELS = ["low", "medium", "high"];
+
+// Wire values of inner[80]; 1/2/3 is what the web client sends for low/medium/high.
+const THINKING_WIRE = { low: 1, medium: 2, high: 3 };
+
+/**
+ * Accepts what OpenAI clients actually send for `reasoning_effort` and turns
+ * it into one of the three web levels. Unknown values mean "leave it to
+ * Google" instead of failing the request.
+ */
+export function resolveThinkingLevel(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") return THINKING_LEVELS[value - 1] || null;
+  const key = String(value).trim().toLowerCase();
+  if (key === "minimal") return "low";
+  if (key === "xhigh" || key === "max") return "high";
+  return Object.hasOwn(THINKING_WIRE, key) ? key : null;
+}
+
+/**
+ * `web-gemini-4-neon@think=high` lets clients that can only set a model name
+ * pick a thinking level. Returns the plain model id plus the level (if any).
+ */
+export function splitWebModelId(id) {
+  const value = String(id || "");
+  const match = value.match(/^(.*?)@think=(low|medium|high)$/i);
+  if (!match) return { model: value, thinking: null };
+  return { model: match[1] || value, thinking: match[2].toLowerCase() };
+}
+
+/**
+ * Thinking level for a chat body: the model-name suffix wins, then
+ * `reasoning_effort` / `reasoning.effort`, then a Claude-style token budget.
+ */
+export function thinkingFromBody(body = {}) {
+  const direct = resolveThinkingLevel(body.reasoning_effort ?? body.reasoning?.effort);
+  if (direct) return direct;
+  const budget = body.thinking?.budget_tokens;
+  if (typeof budget === "number" && budget > 0) {
+    return budget < 2048 ? "low" : budget < 4096 ? "medium" : "high";
+  }
+  return null;
+}
+
+/**
+ * Builds the inner request array. The thinking level rides in inner[80]
+ * (1=low, 2=medium, 3=high); when the client did not ask for one the slot
+ * stays null and Google applies the preset's own default.
+ */
+export function buildWebInner(prompt, model, { temporary = false, thinking = null } = {}) {
+  const cfg = lookupWebModel(model) || WEB_MODELS["web-gemini-4-hydrogen"];
+  const level = thinking ? THINKING_WIRE[thinking] : null;
+  const inner = new Array(102).fill(null);
+  inner[0] = [prompt, 0, null, null, null, null, 0];
+  inner[1] = ["zh-CN"];
+  inner[2] = ["", "", "", null, null, null, null, null, null, ""];
+  inner[6] = [0];
+  inner[7] = 1;
+  inner[10] = 1;
+  inner[11] = 0;
+  inner[17] = [[cfg.think]];
+  inner[18] = 0;
+  inner[27] = 1;
+  inner[30] = [4];
+  inner[41] = temporary ? [1] : [2];
+  inner[45] = temporary ? 1 : null;
+  inner[53] = 0;
+  inner[59] = crypto.randomUUID();
+  inner[61] = [];
+  inner[68] = 1;
+  inner[79] = cfg.mode;
+  if (level) inner[80] = level;
+  return inner;
+}
+
 /**
  * Ask the web endpoint which presets actually answer right now. The web UI has
  * no model-list API, so the only honest check is a tiny prompt per preset.
@@ -415,27 +491,8 @@ export class GoogleWebSession {
     return this.tokens;
   }
 
-  #buildBody(prompt, model, { temporary = false } = {}) {
-    const cfg = lookupWebModel(model) || WEB_MODELS["web-gemini-3.7-flash"];
-    const inner = new Array(102).fill(null);
-    inner[0] = [prompt, 0, null, null, null, null, 0];
-    inner[1] = ["zh-CN"];
-    inner[2] = ["", "", "", null, null, null, null, null, null, ""];
-    inner[6] = [0];
-    inner[7] = 1;
-    inner[10] = 1;
-    inner[11] = 0;
-    inner[17] = [[cfg.think]];
-    inner[18] = 0;
-    inner[27] = 1;
-    inner[30] = [4];
-    inner[41] = temporary ? [1] : [2];
-    inner[45] = temporary ? 1 : null;
-    inner[53] = 0;
-    inner[59] = crypto.randomUUID();
-    inner[61] = [];
-    inner[68] = 1;
-    inner[79] = cfg.mode;
+  #buildBody(prompt, model, { temporary = false, thinking = null } = {}) {
+    const inner = buildWebInner(prompt, model, { temporary, thinking });
     const outer = [null, JSON.stringify(inner)];
     return new URLSearchParams({ "f.req": JSON.stringify(outer) }).toString();
   }
@@ -443,9 +500,9 @@ export class GoogleWebSession {
   /**
    * Stream text deltas from Gemini web. Yields plain text chunks.
    */
-  async *chat(prompt, { model = "web-gemini-3.7-flash", temporary = false } = {}) {
+  async *chat(prompt, { model = "web-gemini-4-hydrogen", temporary = false, thinking = null } = {}) {
     const { atToken: at, bl, cookie } = await this.bootstrap();
-    const body = this.#buildBody(prompt, model, { temporary });
+    const body = this.#buildBody(prompt, model, { temporary, thinking });
     const url =
       `https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate` +
       `?bl=${encodeURIComponent(bl)}&hl=en&_reqid=${Math.floor(Date.now() / 1000) % 1000000}&rt=c`;
