@@ -153,7 +153,11 @@
   .search { max-width: 200px; }
   .meta-row { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 14px; font-size: 12px; color: var(--muted); }
   .meta-row b { color: var(--text); font-weight: 600; }
-  .node-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; margin-top: 12px; max-height: 430px; overflow: auto; padding-right: 2px; }
+  .group-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--border); }
+  .group-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .group-name { font-size: 13px; font-weight: 600; letter-spacing: .2px; }
+  .group-bar button { padding: 4px 10px; font-size: 12px; }
+  .node-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; margin-top: 10px; max-height: 430px; overflow: auto; padding-right: 2px; }
   .node { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; background: #0e1319; }
   .node.active { border-color: #2a3760; background: #111a2c; }
   .node .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
@@ -384,15 +388,22 @@
           </div>
 
           <div class="toolbar">
-            <button id="proxyTestAllBtn">测速全部</button>
-            <button id="proxyRotateBtn">换节点</button>
+            <button id="proxyTestAllBtn" disabled>测速全部</button>
+            <button id="proxyRotateBtn" disabled>换节点</button>
             <button id="proxyRefreshBtn">刷新</button>
-            <button id="proxyStopBtn" class="ghost">停止</button>
+            <button id="proxyStopBtn" class="ghost" disabled>停止</button>
             <span class="spacer"></span>
             <input id="proxySearch" class="search" placeholder="搜索节点…" />
           </div>
 
           <div id="proxyMeta" class="meta-row"></div>
+          <div class="group-bar">
+            <div class="group-title">
+              <span class="group-name">默认分组</span>
+              <span id="proxyGroupCount" class="badge">0 个节点</span>
+            </div>
+            <button id="proxyRemoveAllBtn" class="danger" disabled>删除全部节点</button>
+          </div>
           <div id="proxyNodes" class="node-grid"></div>
         </div>
 
@@ -817,6 +828,29 @@
 
   let proxyLast = null;
 
+  function syncProxyControls(proxy = proxyLast) {
+    const nodes = proxy?.nodes || [];
+    const running = Boolean(proxy?.running);
+    const subscribed = Boolean(proxy?.hasSubscription);
+    $("proxyGroupCount").textContent = `${nodes.length} 个节点`;
+    $("proxyRemoveAllBtn").disabled = !nodes.length;
+    $("proxyRemoveAllBtn").title = nodes.length ? "删除默认分组里的全部节点" : "分组里没有节点";
+    $("proxyTestAllBtn").disabled = !running || !nodes.length;
+    $("proxyRotateBtn").disabled = !running || nodes.length < 2;
+
+    const toggle = $("proxyStopBtn");
+    toggle.textContent = running ? "停止" : "启用";
+    toggle.className = running ? "ghost" : "primary";
+    toggle.disabled = !running && (!subscribed || !nodes.length);
+    toggle.title = running
+      ? "停止使用代理池，保留默认分组和节点"
+      : !subscribed
+        ? "先导入 Clash 订阅 URL"
+        : !nodes.length
+          ? "默认分组为空，重新导入订阅可恢复"
+          : "使用已保存的订阅启用代理池";
+  }
+
   function renderProxy(proxy) {
     proxyLast = proxy;
     const state = $("proxyState");
@@ -826,50 +860,70 @@
     } else if (proxy.error) {
       state.className = "pill err";
       state.innerHTML = '<span class="dot"></span>启动失败';
+    } else if (proxy.hasSubscription) {
+      state.className = "pill idle";
+      state.innerHTML = '<span class="dot"></span>已停止';
     } else {
       state.className = "pill idle";
       state.innerHTML = '<span class="dot"></span>未启动';
     }
 
     const meta = $("proxyMeta");
+    const nodes = proxy.nodes || [];
+    const fastest = proxy.fastest || {};
+    const everyMin = Math.max(1, Math.round((fastest.intervalMs || 600000) / 60000));
+    const parts = [];
     if (proxy.running) {
-      const fastest = proxy.fastest || {};
-      const everyMin = Math.max(1, Math.round((fastest.intervalMs || 600000) / 60000));
-      meta.innerHTML = [
-        `<span>节点 <b>${(proxy.nodes || []).length}</b></span>`,
-        `<span>当前 <b>${esc(proxy.current || "—")}</b></span>`,
-        `<span>订阅 <b>${esc(proxy.subscriptionHost || "—")}</b></span>`,
-        proxy.removed ? `<span>已删除 <b>${proxy.removed}</b> 个</span>` : "",
+      parts.push(`<span>当前 <b>${esc(proxy.current || "—")}</b></span>`);
+      parts.push(`<span>订阅 <b>${esc(proxy.subscriptionHost || "—")}</b></span>`);
+      parts.push(
         `<span>自动测速 <b>${fastest.enabled ? `每 ${everyMin} 分钟` : "关闭"}</b>${fastest.lastAt ? `（上次 ${esc(fastest.node || "-")}）` : ""}</span>`,
-      ].filter(Boolean).join("");
+      );
     } else {
-      meta.innerHTML = proxy.error ? `<span style="color:var(--red)">${esc(proxy.error)}</span>` : "";
+      const label = proxy.hasSubscription
+        ? nodes.length
+          ? "已停止使用（节点保留）"
+          : "分组为空"
+        : "未导入订阅";
+      parts.push(`<span>状态 <b>${label}</b></span>`);
+      if (proxy.subscriptionHost) parts.push(`<span>订阅 <b>${esc(proxy.subscriptionHost)}</b></span>`);
+      if (proxy.error) parts.push(`<span style="color:var(--red)">${esc(proxy.error)}</span>`);
     }
+    if (proxy.removed) parts.push(`<span>已删除 <b>${proxy.removed}</b> 个</span>`);
+    meta.innerHTML = parts.join("");
 
+    syncProxyControls(proxy);
     renderProxyNodes();
   }
 
   function renderProxyNodes() {
     const box = $("proxyNodes");
     const proxy = proxyLast;
-    if (!proxy || !proxy.running || !proxy.nodes?.length) {
+    if (!proxy) {
       box.innerHTML = "";
       return;
     }
+    const all = proxy.nodes || [];
+    if (!all.length) {
+      box.innerHTML = proxy.hasSubscription
+        ? '<div class="empty" style="grid-column:1/-1">默认分组暂无节点。重新导入订阅可恢复。</div>'
+        : '<div class="empty" style="grid-column:1/-1">还没有导入订阅。粘贴 Clash 订阅 URL 后点「导入并启动」。</div>';
+      return;
+    }
     const keyword = ($("proxySearch").value || "").trim().toLowerCase();
-    const nodes = keyword ? proxy.nodes.filter((name) => name.toLowerCase().includes(keyword)) : proxy.nodes;
+    const nodes = keyword ? all.filter((name) => name.toLowerCase().includes(keyword)) : all;
     if (!nodes.length) {
       box.innerHTML = '<div class="empty" style="grid-column:1/-1">没有匹配的节点。</div>';
       return;
     }
     box.innerHTML = nodes.map((name) => {
-      const active = name === proxy.current;
-      const fastest = proxy.fastest && proxy.fastest.node === name;
+      const active = proxy.running && name === proxy.current;
+      const fastest = proxy.running && proxy.fastest && proxy.fastest.node === name;
       return `<div class="node${active ? " active" : ""}">
         <span class="name mono" title="${esc(name)}">${esc(name)}${active ? ' <span class="badge robin">当前</span>' : ""}${fastest ? ' <span class="badge active">最快</span>' : ""}</span>
         <span class="actions">
-          ${delayBadge(name)}
-          <button data-proxy-node="${esc(name)}">使用</button>
+          ${proxy.running ? delayBadge(name) : ""}
+          <button data-proxy-node="${esc(name)}"${proxy.running ? "" : " disabled"} title="${proxy.running ? "切换到这个节点" : "代理池已停止，启用后可切换"}">使用</button>
           <button data-proxy-remove="${esc(name)}">删除</button>
         </span>
       </div>`;
@@ -905,8 +959,9 @@
     btn.textContent = "导入中…";
     try {
       const result = await api("/admin/api/proxy/import", { method: "POST", body: JSON.stringify({ url }) });
+      proxyDelays = {};
       renderProxy(result.proxy || {});
-      toast(`代理池已启动：${result.proxy?.nodes?.length || 0} 个节点`);
+      toast(`已导入 ${result.proxy?.nodes?.length || 0} 个节点到默认分组`);
     } catch (error) {
       toast(error.message, true);
     } finally {
@@ -924,12 +979,38 @@
     }
   });
   $("proxyStopBtn").addEventListener("click", async () => {
+    const running = Boolean(proxyLast?.running);
     try {
-      const result = await api("/admin/api/proxy/stop", { method: "POST", body: "{}" });
+      const result = await api(running ? "/admin/api/proxy/stop" : "/admin/api/proxy/start", {
+        method: "POST",
+        body: "{}",
+      });
+      proxyDelays = {};
       renderProxy(result.proxy || {});
-      toast("代理池已停止");
+      toast(running ? "已停止使用代理池，默认分组和节点已保留" : "代理池已启用");
     } catch (error) {
       toast(error.message, true);
+    } finally {
+      syncProxyControls();
+    }
+  });
+  $("proxyRemoveAllBtn").addEventListener("click", async () => {
+    const total = proxyLast?.nodes?.length || 0;
+    if (!total) return;
+    const running = Boolean(proxyLast?.running);
+    const detail = running ? "代理池会停止使用，默认分组清空" : "代理池当前已停止，默认分组将清空";
+    if (!confirm(`删除默认分组里的全部 ${total} 个节点？\n${detail}；重新导入订阅可恢复。`)) return;
+    const btn = $("proxyRemoveAllBtn");
+    btn.disabled = true;
+    try {
+      const result = await api("/admin/api/proxy/remove-all", { method: "POST", body: "{}" });
+      proxyDelays = {};
+      renderProxy(result.proxy || {});
+      toast("已删除全部节点，默认分组已清空");
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      syncProxyControls();
     }
   });
   $("proxyRefreshBtn").addEventListener("click", loadProxy);
@@ -939,17 +1020,25 @@
     const removeBtn = event.target.closest("[data-proxy-remove]");
     if (removeBtn) {
       const name = removeBtn.dataset.proxyRemove;
-      if (!confirm(`删除节点「${name}」？\n会重启本地代理内核，正在进行的请求会中断。`)) return;
+      const total = proxyLast?.nodes?.length || 0;
+      const last = total <= 1;
+      const detail = last
+        ? "\n这是默认分组的最后一个节点，删除后分组会清空并停止使用。"
+        : proxyLast?.running
+          ? "\n会重启本地代理内核，正在进行的请求会中断。"
+          : "\n代理池当前已停止，只会更新默认分组。";
+      if (!confirm(`删除节点「${name}」？${detail}`)) return;
       removeBtn.disabled = true;
       try {
         const result = await api("/admin/api/proxy/remove", { method: "POST", body: JSON.stringify({ name }) });
         delete proxyDelays[name];
         renderProxy(result.proxy || {});
-        toast("已删除节点");
+        toast(last ? "已删除最后一个节点，默认分组已清空" : "已删除节点");
       } catch (error) {
         toast(error.message, true);
       } finally {
         removeBtn.disabled = false;
+        syncProxyControls();
       }
       return;
     }
@@ -980,8 +1069,8 @@
     } catch (error) {
       toast(error.message, true);
     } finally {
-      btn.disabled = false;
       btn.textContent = "测速全部";
+      syncProxyControls();
     }
   });
 

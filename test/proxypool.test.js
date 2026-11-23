@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildMihomoConfig, isInfoNode, parseClashConfig } from "../src/proxypool.js";
+import {
+  buildMihomoConfig,
+  filterRemovedNodes,
+  isInfoNode,
+  parseClashConfig,
+  shouldAutoStart,
+} from "../src/proxypool.js";
 
 const SAMPLE = `
 port: 7890
@@ -43,6 +49,22 @@ test("buildMihomoConfig wires a selector group and match rule", () => {
   assert.equal(cfg.secret, "s");
   assert.deepEqual(cfg["proxy-groups"][0].proxies, ["node-a", "node-b"]);
   assert.deepEqual(cfg.rules, ["MATCH,POOL"]);
+});
+
+test("filterRemovedNodes keeps the rest of the default group", () => {
+  const { proxies } = parseClashConfig(SAMPLE);
+  const kept = filterRemovedNodes(proxies, ["node-a"]);
+  assert.deepEqual(kept.map((node) => node.name), ["node-b"]);
+  assert.deepEqual(filterRemovedNodes(proxies, []), proxies);
+  assert.deepEqual(filterRemovedNodes(proxies, undefined).length, 2);
+});
+
+test("shouldAutoStart respects an explicit stop and legacy settings", () => {
+  assert.equal(shouldAutoStart({ proxySubscription: "https://example.com/sub" }), true);
+  assert.equal(shouldAutoStart({ proxySubscription: "https://example.com/sub", proxyEnabled: true }), true);
+  assert.equal(shouldAutoStart({ proxySubscription: "https://example.com/sub", proxyEnabled: false }), false);
+  assert.equal(shouldAutoStart({ proxySubscription: "", proxyEnabled: true }), false);
+  assert.equal(shouldAutoStart(null), false);
 });
 
 test("info nodes are dropped from subscriptions", () => {

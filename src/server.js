@@ -446,7 +446,7 @@ async function handleWebChat(req, res, body, model, stream, thinking = null) {
     try {
       return await fn();
     } catch (error) {
-      if (!isAbuseBlock(error) || proxyPool.nodes.length < 2) throw error;
+      if (!isAbuseBlock(error) || !proxyPool.running || proxyPool.nodes.length < 2) throw error;
       const next = await proxyPool.rotate().catch(() => "");
       if (!next) throw error;
       logWarn(`web: abuse page from Google, switched proxy node to ${next}`);
@@ -828,13 +828,22 @@ app.post("/admin/api/proxy/import", requireAdmin, async (req, res) => {
   const url = String(req.body?.url || "").trim();
   if (!url) return res.status(400).json({ ok: false, error: "缺少订阅 URL" });
   try {
-    store.updateSettings({ proxyRemoved: [] });
-    const status = await proxyPool.start(url);
-    store.updateSettings({ proxySubscription: url });
-    logInfo(`proxy pool: imported ${status.nodes.length} nodes`);
+    const status = await proxyPool.importSubscription(url);
+    logInfo(`proxy pool: imported ${status.nodes.length} nodes into ${status.group}`);
     res.json({ ok: true, proxy: status });
   } catch (error) {
     logWarn(`proxy pool import failed: ${error.message}`);
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/admin/api/proxy/start", requireAdmin, async (req, res) => {
+  try {
+    const status = await proxyPool.start();
+    logInfo(`proxy pool: resumed with ${status.nodes.length} nodes`);
+    res.json({ ok: true, proxy: status });
+  } catch (error) {
+    logWarn(`proxy pool resume failed: ${error.message}`);
     res.status(400).json({ ok: false, error: error.message });
   }
 });
@@ -876,6 +885,16 @@ app.post("/admin/api/proxy/remove", requireAdmin, async (req, res) => {
   }
 });
 
+app.post("/admin/api/proxy/remove-all", requireAdmin, async (req, res) => {
+  try {
+    const status = await proxyPool.removeAll();
+    logInfo(`proxy pool: group cleared, ${status.removed} nodes marked removed`);
+    res.json({ ok: true, proxy: status });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
 app.post("/admin/api/proxy/test", requireAdmin, async (req, res) => {
   try {
     const result = await proxyPool.testNode(String(req.body?.name || ""));
@@ -886,8 +905,9 @@ app.post("/admin/api/proxy/test", requireAdmin, async (req, res) => {
 });
 
 app.post("/admin/api/proxy/stop", requireAdmin, async (req, res) => {
+  // Stop using the pool as the outbound VPN; keep the default group, its
+  // nodes, and the subscription URL so "启用" can resume without re-importing.
   await proxyPool.stop();
-  store.updateSettings({ proxySubscription: "" });
   res.json({ ok: true, proxy: proxyPool.status() });
 });
 
@@ -1058,7 +1078,7 @@ function shutdown(signal) {
     /* ignore */
   }
   server.close(() => {
-    void proxyPool.stop().catch(() => {});
+    void proxyPool.stop({ persist: false }).catch(() => {});
     void waaSigner.stop().catch(() => {});
     void store.flush().finally(() => process.exit(0));
   });

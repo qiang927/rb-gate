@@ -11,6 +11,7 @@ import { setOutboundProxy } from "./proxyroute.js";
 
 const CONTROLLER = "127.0.0.1";
 const GROUP = "POOL";
+const GROUP_NAME = "默认分组";
 const TEST_URL = "https://www.gstatic.com/generate_204";
 
 function subscriptionUrl(input) {
@@ -117,7 +118,18 @@ function hostOf(url) {
   }
 }
 
-class ProxyPool {
+export function filterRemovedNodes(proxies, removed) {
+  const skip = new Set(Array.isArray(removed) ? removed : []);
+  return (Array.isArray(proxies) ? proxies : []).filter((node) => node?.name && !skip.has(node.name));
+}
+
+// A pool explicitly stopped by the user stays off across restarts. Older
+// settings files only stored `proxySubscription`, so they still auto-start.
+export function shouldAutoStart(settings) {
+  return Boolean(String(settings?.proxySubscription || "").trim()) && settings?.proxyEnabled !== false;
+}
+
+export class ProxyPool {
   constructor() {
     this.child = null;
     this.nodes = [];
@@ -125,7 +137,7 @@ class ProxyPool {
     this.current = "";
     this.secret = "";
     this.error = "";
-    this.subscription = "";
+    this.subscription = String(store.settings()?.proxySubscription || "");
     this.startedAt = 0;
     this.fastestTimer = null;
     this.fastestAt = 0;
@@ -202,8 +214,8 @@ class ProxyPool {
   }
 
   async apply(proxies, { url = "" } = {}) {
-    await this.stop();
     if (!proxies.length) throw new Error("没有可用节点");
+    await this.#stopProcess();
 
     this.secret = crypto.randomBytes(16).toString("hex");
     const dir = path.join(config.dataDir, "proxy");
@@ -221,6 +233,14 @@ class ProxyPool {
     });
     this.child = child;
     this.error = "";
+    child.on("error", (error) => {
+      if (this.child === child) {
+        this.child = null;
+        this.error = `mihomo 启动失败：${error.message}`;
+        setOutboundProxy("");
+        logWarn(this.error);
+      }
+    });
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
@@ -239,7 +259,8 @@ class ProxyPool {
     try {
       await this.waitReady();
     } catch (error) {
-      await this.stop();
+      await this.#stopProcess();
+      this.error = error.message || "mihomo 启动失败";
       throw error;
     }
 
@@ -249,34 +270,98 @@ class ProxyPool {
     if (url) this.subscription = url;
     this.startedAt = Date.now();
     setOutboundProxy(`http://${CONTROLLER}:${this.port}`);
-    logInfo(`proxy pool ready: ${this.nodes.length} nodes (${hostOf(this.subscription)})`);
+    store.updateSettings({
+      proxyEnabled: true,
+      proxyNodes: [...this.nodes],
+      ...(url ? { proxySubscription: url } : {}),
+    });
+    logInfo(`proxy pool ready: ${this.nodes.length} nodes in ${GROUP_NAME} (${hostOf(this.subscription)})`);
     this.#scheduleFastest();
     return this.status();
   }
 
-  async start(inputUrl) {
+  // Used both by the first import and by "启用" after a stop. A stopped pool
+  // keeps its parsed nodes in memory, so resuming is instant and does not
+  // depend on the subscription still being reachable. After a process restart
+  // the cached nodes are gone, and the saved subscription is fetched again.
+  async start(inputUrl = "") {
+    const url =
+      subscriptionUrl(inputUrl) || this.subscription || String(store.settings()?.proxySubscription || "").trim();
+    if (!url) throw new Error("还没有导入订阅，请先粘贴订阅 URL");
+    let source = this.proxies;
+    if (!source.length) {
+      const text = await fetchText(url);
+      const parsed = parseClashConfig(text);
+      if (!parsed.nodes.length) {
+        throw new Error("订阅里没有 Clash 节点（需要 proxies 列表，ss/vmess/trojan/hysteria2 等）");
+      }
+      source = parsed.proxies;
+    }
+    const kept = filterRemovedNodes(source, store.settings()?.proxyRemoved);
+    if (!kept.length) throw new Error("默认分组里的节点都被删除了，重新导入订阅可恢复");
+    return await this.apply(kept, { url });
+  }
+
+  async importSubscription(inputUrl) {
     const url = subscriptionUrl(inputUrl);
     if (!url) throw new Error("缺少订阅 URL");
     const text = await fetchText(url);
     const { nodes, proxies } = parseClashConfig(text);
     if (!nodes.length) throw new Error("订阅里没有 Clash 节点（需要 proxies 列表，ss/vmess/trojan/hysteria2 等）");
-    const removed = new Set(store.settings()?.proxyRemoved || []);
-    const kept = proxies.filter((node) => !removed.has(node.name));
-    if (!kept.length) throw new Error("所有节点都被删除了，重新导入订阅可恢复");
-    return await this.apply(kept, { url });
+    await this.apply(proxies, { url });
+    // Re-importing is the recovery path for deleted nodes: start from a clean
+    // default group, then persist the new URL as the active subscription.
+    store.updateSettings({ proxyRemoved: [] });
+    return this.status();
   }
 
   async removeNode(name) {
-    if (!this.running) throw new Error("代理池未启动");
     const target = String(name || "");
-    if (!this.nodes.includes(target)) throw new Error("没有这个节点");
-    const kept = this.proxies.filter((node) => node.name !== target);
-    if (!kept.length) throw new Error("至少需要保留一个节点");
-    const removed = new Set(store.settings()?.proxyRemoved || []);
+    const settings = store.settings() || {};
+    const known = this.nodes.length
+      ? [...this.nodes]
+      : Array.isArray(settings.proxyNodes)
+        ? settings.proxyNodes.map(String)
+        : [];
+    if (!known.includes(target)) throw new Error("没有这个节点");
+
+    const removed = new Set(settings.proxyRemoved || []);
     removed.add(target);
-    store.updateSettings({ proxyRemoved: [...removed] });
-    logInfo(`proxy pool: removed node ${target}`);
-    return await this.apply(kept);
+    const left = known.filter((node) => node !== target);
+    this.nodes = left;
+    this.proxies = this.proxies.filter((node) => node.name !== target);
+    store.updateSettings({ proxyRemoved: [...removed], proxyNodes: [...left] });
+    logInfo(`proxy pool: removed node ${target}, ${left.length} left in ${GROUP_NAME}`);
+
+    if (!left.length) {
+      // Deleting the last node empties the group and stops using the pool;
+      // the subscription URL is kept so a re-import is one paste away.
+      await this.stop();
+      return this.status();
+    }
+    if (this.running) return await this.apply(this.proxies);
+    return this.status();
+  }
+
+  async removeAll() {
+    const settings = store.settings() || {};
+    const names = this.nodes.length
+      ? this.nodes
+      : Array.isArray(settings.proxyNodes)
+        ? settings.proxyNodes.map(String)
+        : [];
+    const removed = new Set(settings.proxyRemoved || []);
+    for (const name of names) removed.add(String(name));
+
+    await this.#stopProcess();
+    this.nodes = [];
+    this.proxies = [];
+    this.current = "";
+    this.error = "";
+    this.startedAt = 0;
+    store.updateSettings({ proxyRemoved: [...removed], proxyNodes: [], proxyEnabled: false });
+    logInfo(`proxy pool: removed all ${names.length} nodes from ${GROUP_NAME}`);
+    return this.status();
   }
 
   async testAll() {
@@ -304,7 +389,7 @@ class ProxyPool {
     return results;
   }
 
-  async stop() {
+  async #stopProcess() {
     const child = this.child;
     this.child = null;
     if (child) {
@@ -325,12 +410,23 @@ class ProxyPool {
       clearInterval(this.fastestTimer);
       this.fastestTimer = null;
     }
-    this.nodes = [];
-    this.proxies = [];
+    setOutboundProxy("");
+  }
+
+  // "停止" only stops using the pool as the outbound VPN. The default group,
+  // its nodes, and the subscription URL stay in memory and in settings so the
+  // user can press "启用" later without importing again.
+  async stop({ persist = true } = {}) {
+    await this.#stopProcess();
     this.current = "";
     this.error = "";
     this.startedAt = 0;
-    setOutboundProxy("");
+    if (persist) {
+      store.updateSettings({
+        proxyEnabled: false,
+        ...(this.nodes.length ? { proxyNodes: [...this.nodes] } : {}),
+      });
+    }
   }
 
   async select(name) {
@@ -402,15 +498,21 @@ class ProxyPool {
   }
 
   status() {
+    const settings = store.settings() || {};
+    const configured = this.subscription || String(settings.proxySubscription || "").trim();
+    const cached = Array.isArray(settings.proxyNodes) ? settings.proxyNodes : [];
+    const nodes = this.nodes.length ? [...this.nodes] : cached.map(String);
     return {
       running: this.running,
-      nodes: this.nodes,
-      current: this.current,
+      group: GROUP_NAME,
+      nodes,
+      current: this.running ? this.current : "",
       error: this.error,
       port: this.port,
-      subscriptionHost: this.subscription ? hostOf(this.subscription) : "",
+      subscriptionHost: configured ? hostOf(configured) : "",
+      hasSubscription: Boolean(configured),
       startedAt: this.startedAt,
-      removed: (store.settings()?.proxyRemoved || []).length,
+      removed: (settings.proxyRemoved || []).length,
       fastest: {
         enabled: config.autoFastest,
         intervalMs: config.autoFastestMs,
@@ -430,8 +532,9 @@ export function isAbuseBlock(error) {
 }
 
 export async function initProxyPool() {
-  const url = store.settings()?.proxySubscription || "";
-  if (!url) return;
+  const settings = store.settings() || {};
+  if (!shouldAutoStart(settings)) return;
+  const url = String(settings.proxySubscription || "");
   // Give the instance a moment (slow cold start) and retry once on failure.
   await new Promise((resolve) => setTimeout(resolve, 3_000));
   for (let attempt = 0; attempt < 2; attempt += 1) {

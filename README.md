@@ -175,7 +175,7 @@ https://<service-name>.onrender.com
 - **多凭证轮换**：Cookie 导入前验证；按最久未用优先；失败自动冷却并换号。
 - **动态模型探测**：确认此刻哪个档位真正可用。
 - **档位 / 额度自动检测**：Pro / Ultra / Plus / Free、5h 与 7d 剩余额度、模型所需档位；额度耗尽的账号自动跳过。
-- **Clash 代理池**：内置 mihomo 内核，导入订阅即用；自动跳过订阅里的“剩余流量/官网/时间戳”横幅节点；测速、删除节点、每 10 分钟自动切最快；命中 `/sorry` 自动换节点重试。
+- **Clash 代理池**：内置 mihomo 内核，导入订阅后节点进入「默认分组」，可删除全部或单个节点；停止仅停止使用代理池 VPN，分组和订阅保留，可随时重新启用；自动跳过订阅里的“剩余流量/官网/时间戳”横幅节点；测速、每 10 分钟自动切最快；命中 `/sorry` 自动换节点重试。
 - **管理面板**：凭证、API Keys、模型、日志、密码、代理池；桌面宽屏（1440px 双栏）与手机自适应。
 - **零数据库**：JSON + 原子写；Cookie AES-256-GCM 加密；admin 密码 scrypt。
 - **Cloudflare KV 持久化**：免费层重启不丢数据（可选）。
@@ -229,7 +229,7 @@ https://<service-name>.onrender.com
 | POST | `/admin/api/web/probe` | 单 Cookie 探测 |
 | POST | `/admin/api/credentials/:id/test`，PATCH/DELETE `:id` | 测试 / 启停 / 删除 |
 | GET | `/admin/api/web/models`，POST `web/models/probe` | 动态模型探测 |
-| GET/POST | `/admin/api/proxy`，`proxy/import` `proxy/select` `proxy/rotate` `proxy/test-all` `proxy/remove` `proxy/stop` | 代理池 |
+| GET/POST | `/admin/api/proxy`，`proxy/import` `proxy/start` `proxy/select` `proxy/rotate` `proxy/test-all` `proxy/remove` `proxy/remove-all` `proxy/stop` | 代理池；`stop` 仅暂停使用并保留默认分组 |
 | GET | `/admin/api/logs` | 最近日志 |
 | POST | `/admin/api/password` | 改密码（`ADMIN_PASSWORD` 已设置时拒绝） |
 
