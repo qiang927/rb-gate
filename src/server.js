@@ -499,7 +499,7 @@ async function handleWebChat(req, res, body, model, stream) {
         wroteRole = true;
       }
       send(buildOpenaiChunk({ id, model, created, delta: { content: delta } }));
-      step = await candidate.next();
+      step = await iterator.next();
     }
     store.markUsed(cred.id);
     store.markOk(cred.id);
