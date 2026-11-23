@@ -1,6 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildWebInner, parseCookieJar, resolveThinkingLevel, splitWebModelId, thinkingFromBody } from "../src/googleweb.js";
+import {
+  WEB_MODELS,
+  WEB_PRESETS,
+  buildWebInner,
+  isWebModel,
+  lookupWebModel,
+  parseCookieJar,
+  requiredTierForModel,
+  resolveThinkingLevel,
+  splitWebModelId,
+  thinkingFromBody,
+} from "../src/googleweb.js";
 
 test("parseCookieJar accepts a raw request-header string", () => {
   const jar = parseCookieJar("SID=abc; __Secure-1PSID=def; HSID=ghi");
@@ -76,4 +87,48 @@ test("thinkingFromBody reads reasoning_effort, reasoning.effort and a token budg
   assert.equal(thinkingFromBody({ thinking: { budget_tokens: 3000 } }), "medium");
   assert.equal(thinkingFromBody({ thinking: { budget_tokens: 8192 } }), "high");
   assert.equal(thinkingFromBody({}), null);
+});
+
+test("the web catalogue advertises every preset at all three levels", () => {
+  const ids = Object.keys(WEB_MODELS);
+  assert.equal(ids.length, 15);
+  assert.equal(new Set(ids).size, 15);
+  for (const preset of Object.keys(WEB_PRESETS)) {
+    for (const level of ["low", "medium", "high"]) {
+      const id = `${preset}-${level}`;
+      assert.ok(WEB_MODELS[id], `${id} is listed`);
+      assert.equal(WEB_MODELS[id].preset, preset);
+      assert.equal(WEB_MODELS[id].level, level);
+      assert.equal(WEB_MODELS[id].mode, WEB_PRESETS[preset].mode);
+    }
+  }
+});
+
+test("a level-specific model id sets inner[80] without help from the request body", () => {
+  for (const [level, wire] of [["low", 1], ["medium", 2], ["high", 3]]) {
+    const inner = buildWebInner("hi", `web-gemini-4-neon-${level}`);
+    assert.equal(inner[79], 2);
+    assert.equal(inner[80], wire);
+  }
+});
+
+test("an explicit level still overrides the level baked into the model id", () => {
+  const inner = buildWebInner("hi", "web-gemini-4-neon-high", { thinking: "low" });
+  assert.equal(inner[80], 1);
+});
+
+test("bare preset ids stay callable as a Google-default alias", () => {
+  assert.ok(isWebModel("web-gemini-4-neon"));
+  assert.ok(isWebModel("web-gemini-4-neon-high"));
+  assert.equal(isWebModel("web-gemini-4-neon-banana"), false);
+  assert.equal(lookupWebModel("web-gemini-4-neon").level, null);
+  assert.equal(buildWebInner("hi", "web-gemini-4-neon")[80], null);
+});
+
+test("requiredTierForModel understands level suffixes and bare aliases", () => {
+  assert.equal(requiredTierForModel("web-gemini-4-carbon-high"), "Ultra");
+  assert.equal(requiredTierForModel("web-gemini-4-neon-low"), "Pro");
+  assert.equal(requiredTierForModel("web-gemini-4-hydrogen-medium"), "Free");
+  assert.equal(requiredTierForModel("web-gemini-4-neon"), "Pro");
+  assert.equal(requiredTierForModel("nope"), null);
 });

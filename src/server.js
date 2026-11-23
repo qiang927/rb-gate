@@ -130,7 +130,7 @@ let webModelsCache = null;
 function webModelEntries() {
   const probed = new Map(((webModelsCache && webModelsCache.models) || []).map((item) => [item.id, item]));
   return Object.entries(WEB_MODELS).map(([id, cfg]) => {
-    const hit = probed.get(id);
+    const hit = probed.get(cfg.preset);
     return {
       id,
       display_name: cfg.label,
@@ -140,7 +140,9 @@ function webModelEntries() {
       groups: ["robin"],
       metadata: {
         mode: cfg.mode,
+        preset: cfg.preset,
         required_tier: requiredTierForModel(id),
+        thinking_level: cfg.level,
         thinking_levels: THINKING_LEVELS,
         available: hit ? hit.ok : null,
         latency_ms: hit ? hit.ms : null,
@@ -212,7 +214,7 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
   if (isStudioModel(body.model)) return handleStudioChat(req, res, body, body.model, stream);
   const web = splitWebModelId(body.model);
   if (!isWebModel(web.model)) {
-    return sendOpenaiError(res, 404, `model ${body.model || "(missing)"} is not available; web models look like web-gemini-4-neon (append @think=low|medium|high to pick a thinking level)`, {
+    return sendOpenaiError(res, 404, `model ${body.model || "(missing)"} is not available; web models look like web-gemini-4-neon-low, web-gemini-4-neon-medium or web-gemini-4-neon-high`, {
       code: "model_not_found",
     });
   }

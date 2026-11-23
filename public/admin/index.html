@@ -337,7 +337,7 @@
       <div class="models-grid">
       <div class="card">
         <strong>模型清单</strong>
-        <p class="hint">Gemini 网页版固定 5 个 <code>web-gemini-4-*</code>，每个都支持三档思维强度（low / medium / high）：请求里带 <code>reasoning_effort</code>，或把模型名写成 <code>web-gemini-4-neon@think=high</code>。导入 pggo（AI Studio Cookie）后，这里还会出现该账号真实可用的 <code>pggo-*</code> 模型。</p>
+        <p class="hint">Gemini 网页版现在固定 15 个模型：5 个档位 × 三档思维强度（low / medium / high），每个强度都是独立的模型 ID，例如 <code>web-gemini-4-neon-low</code> / <code>-medium</code> / <code>-high</code>，客户端在选模型时就能挑强度，不需要额外参数。旧的不带强度的 <code>web-gemini-4-neon</code> 仍可用（等于不指定强度，由 Google 用默认值）。导入 pggo（AI Studio Cookie）后，这里还会出现该账号真实可用的 <code>pggo-*</code> 模型。</p>
         <div id="modelsTableWrap"><div class="empty">加载中…</div></div>
       </div>
       <div class="card">
@@ -726,7 +726,7 @@
       <td data-label="耗时" class="small muted">${item.ms != null ? item.ms + " ms" : "—"}</td>
       <td data-label="结果" class="small muted">${esc(item.ok ? item.sample || "" : item.error || "")}</td>
     </tr>`).join("");
-    wrap.innerHTML = `<p class="hint">检测时间：${esc(at)}</p><table class="cards"><thead><tr><th>模型</th><th>名称</th><th>状态</th><th>耗时</th><th>结果</th></tr></thead><tbody>${rows}</tbody></table>`;
+    wrap.innerHTML = `<p class="hint">检测时间：${esc(at)}。每个上游档位发一句 ping，同一档位的三档强度共用同一个上游，可用性一致。</p><table class="cards"><thead><tr><th>上游档位</th><th>名称</th><th>状态</th><th>耗时</th><th>结果</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
   async function loadWebModels() {
@@ -772,7 +772,7 @@
         <td data-label="官方档位" class="small muted">${esc(meta.required_tier || "—")}</td>
         <td data-label="状态" class="small">${state}</td>
         <td data-label="模式" class="small muted">${esc(String(meta.mode ?? "—"))}</td>
-        <td data-label="思维强度" class="small muted">${esc(Array.isArray(meta.thinking_levels) && meta.thinking_levels.length ? meta.thinking_levels.map((level) => ({ low: "低", medium: "中", high: "高" }[level] || level)).join(" / ") : "—")}</td>
+        <td data-label="思维强度" class="small muted">${esc(meta.thinking_level ? ({ low: "低", medium: "中", high: "高" }[meta.thinking_level] || meta.thinking_level) : "—")}</td>
         <td data-label="延迟" class="small muted">${meta.latency_ms != null ? meta.latency_ms + " ms" : "—"}</td>
       </tr>`;
     }).join("");

@@ -2,7 +2,7 @@
 
 把 **Gemini 网页版会话**包装成 **OpenAI 兼容 API** 的自托管网关。带管理面板、多账号轮换、Clash 代理池，可一键部署到 Render。
 
-- 5 个网页版模型：`web-gemini-4-hydrogen` / `-neon` / `-carbon` / `-auto` / `-flash-lite`，每个都支持 low / medium / high 三档思维强度
+- 15 个网页版模型：5 个档位 × 三档思维强度（low / medium / high），强度直接写在模型名里，如 `web-gemini-4-neon-high`
 - 用你自己的 Google 账号，**不需要** Gemini API Key
 - 一个二进制/一个容器，无数据库
 - 有手就行 → **[保姆级部署文档](docs/02-部署.md)**
@@ -106,27 +106,35 @@ https://<service-name>.onrender.com
 
 ## 模型
 
-`GET /v1/models` 返回 5 个模型：
+`GET /v1/models` 返回 15 个网页版模型：5 个上游档位 × 三档思维强度。强度直接写在模型名末尾，客户端在选模型时就确定了强度，不需要额外参数：
 
-| 模型 ID | 网页端档位 | 最低账号档位 | 适合 |
-|---|---|---|---|
-| `web-gemini-4-hydrogen` | 4 Hydrogen | Free | 日常问答，快 |
-| `web-gemini-4-neon` | 4 Neon | Pro | 深度分析 |
-| `web-gemini-4-carbon` | 4 Carbon | Ultra | 代码 / 复杂任务 |
-| `web-gemini-4-auto` | 自动 | Free | 让 Google 选 |
-| `web-gemini-4-flash-lite` | Flash-Lite | Free | 极快、简单任务 |
+| 网页端档位 | low | medium | high | 最低账号档位 | 适合 |
+|---|---|---|---|---|---|
+| 4 Hydrogen | `web-gemini-4-hydrogen-low` | `web-gemini-4-hydrogen-medium` | `web-gemini-4-hydrogen-high` | Free | 日常问答，快 |
+| 4 Neon | `web-gemini-4-neon-low` | `web-gemini-4-neon-medium` | `web-gemini-4-neon-high` | Pro | 深度分析 |
+| 4 Carbon | `web-gemini-4-carbon-low` | `web-gemini-4-carbon-medium` | `web-gemini-4-carbon-high` | Ultra | 代码 / 复杂任务 |
+| 自动 | `web-gemini-4-auto-low` | `web-gemini-4-auto-medium` | `web-gemini-4-auto-high` | Free | 让 Google 选 |
+| Flash-Lite | `web-gemini-4-flash-lite-low` | `web-gemini-4-flash-lite-medium` | `web-gemini-4-flash-lite-high` | Free | 极快、简单任务 |
 
-`GET /v1/models` 的 `metadata.required_tier` 会带上最低档位，`metadata.thinking_levels` 会带上三档思维强度，方便客户端自己判断。
+- `metadata.thinking_level` 是这个模型的强度（`low` / `medium` / `high`），`metadata.thinking_levels` 仍返回三档全集，兼容旧客户端。
+- 不带强度的旧 ID（如 `web-gemini-4-neon`）仍然可用，等价于「不指定强度、由 Google 用默认值」，但不在这 15 个里列出。
+- `metadata.required_tier` 是最低账号档位，方便客户端自己判断。
 
 ### 思维强度
 
-每个 `web-*` 档位都能再选 low / medium / high：
+| 强度 | 行为 | 适合 |
+|---|---|---|
+| `low` | 想得最少、最快 | 事实问答、改写、翻译 |
+| `medium` | 折中 | 一般推理、长文 |
+| `high` | 想得最深、最慢，输出 token 也最多 | 难题、代码、数学 |
+
+选模型就是选强度：
 
 ```json
-{"model": "web-gemini-4-neon", "reasoning_effort": "high", "messages": [{"role": "user", "content": "..."}]}
+{"model": "web-gemini-4-neon-high", "messages": [{"role": "user", "content": "..."}]}
 ```
 
-也可以把强度写进模型名（适合只能填模型名的客户端）：`web-gemini-4-neon@think=high`。后缀优先于 `reasoning_effort`；两者都不传时网关不设置该字段，由 Google 用档位默认值。详见 [docs/03-使用.md](docs/03-使用.md#思维强度low--medium--high)。
+如果客户端能发请求字段，也兼容 `reasoning_effort` / `reasoning.effort` 和 Claude 风格的 `thinking.budget_tokens`，以及 `web-gemini-4-neon@think=high` 后缀。优先级：`@think` 后缀 > 请求字段 > 模型名里的强度。详见 [docs/03-使用.md](docs/03-使用.md#思维强度low--medium--high)。
 
 网页端没有公开的模型列表接口，所谓“动态读取”是**面板逐个档位发 ping**：
 

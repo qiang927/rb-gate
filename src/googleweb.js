@@ -11,9 +11,10 @@ const DEFAULT_WEB_APP = "com.google.android.apps.chromecast.app";
 const DEFAULT_WEB_SIG = "24bb24c05e47e0aefa68a58a766179d9b613a600";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
 
-export const WEB_MODELS = {
-  // The Gemini web client only exposes these five chat presets. Which backend
-  // model each preset maps to is decided by Google, so we address them by mode.
+/** The five chat presets the Gemini web client exposes. */
+export const WEB_PRESETS = {
+  // Which backend model each preset maps to is decided by Google, so we
+  // address them by mode.
   "web-gemini-4-hydrogen": { mode: 1, think: 4, label: "Gemini 4 Hydrogen (Web)" },
   "web-gemini-4-neon": { mode: 2, think: 0, label: "Gemini 4 Neon (Web)" },
   "web-gemini-4-carbon": { mode: 3, think: 4, label: "Gemini 4 Carbon (Web)" },
@@ -21,16 +22,39 @@ export const WEB_MODELS = {
   "web-gemini-4-flash-lite": { mode: 6, think: 4, label: "Gemini 4 Flash-Lite (Web)" },
 };
 
+/** The three thinking strengths the Gemini web client exposes per preset. */
+export const THINKING_LEVELS = ["low", "medium", "high"];
+const LEVEL_LABELS = { low: "Low", medium: "Medium", high: "High" };
+
+/**
+ * Every preset is advertised once per thinking level, so a client that can
+ * only pick a model name (no reasoning_effort field) can still choose the
+ * strength. IDs look like `web-gemini-4-neon-high`.
+ */
+export const WEB_MODELS = {};
+for (const [presetId, cfg] of Object.entries(WEB_PRESETS)) {
+  for (const level of THINKING_LEVELS) {
+    WEB_MODELS[`${presetId}-${level}`] = {
+      ...cfg,
+      preset: presetId,
+      level,
+      label: `${cfg.label} · ${LEVEL_LABELS[level]}`,
+    };
+  }
+}
+
+/** Bare preset ids stay callable for older clients; they mean "Google default". */
+const WEB_MODEL_ALIASES = Object.fromEntries(
+  Object.entries(WEB_PRESETS).map(([presetId, cfg]) => [presetId, { ...cfg, preset: presetId, level: null }]),
+);
+
 export function lookupWebModel(id) {
-  return WEB_MODELS[id] || null;
+  return WEB_MODELS[id] || WEB_MODEL_ALIASES[id] || null;
 }
 
 export function isWebModel(id) {
-  return Boolean(WEB_MODELS[id]);
+  return Boolean(WEB_MODELS[id] || WEB_MODEL_ALIASES[id]);
 }
-
-/** The three thinking strengths the Gemini web client exposes per preset. */
-export const THINKING_LEVELS = ["low", "medium", "high"];
 
 // Wire values of inner[80]; 1/2/3 is what the web client sends for low/medium/high.
 const THINKING_WIRE = { low: 1, medium: 2, high: 3 };
@@ -80,8 +104,8 @@ export function thinkingFromBody(body = {}) {
  * stays null and Google applies the preset's own default.
  */
 export function buildWebInner(prompt, model, { temporary = false, thinking = null } = {}) {
-  const cfg = lookupWebModel(model) || WEB_MODELS["web-gemini-4-hydrogen"];
-  const level = thinking ? THINKING_WIRE[thinking] : null;
+  const cfg = lookupWebModel(model) || WEB_MODEL_ALIASES["web-gemini-4-hydrogen"];
+  const level = thinking ? THINKING_WIRE[thinking] : cfg.level ? THINKING_WIRE[cfg.level] : null;
   const inner = new Array(102).fill(null);
   inner[0] = [prompt, 0, null, null, null, null, 0];
   inner[1] = ["zh-CN"];
@@ -111,7 +135,7 @@ export function buildWebInner(prompt, model, { temporary = false, thinking = nul
  */
 export async function probeWebModels(session, { timeoutMs = 60000 } = {}) {
   const results = [];
-  for (const [id, cfg] of Object.entries(WEB_MODELS)) {
+  for (const [id, cfg] of Object.entries(WEB_PRESETS)) {
     const started = Date.now();
     let timer = null;
     try {
@@ -291,7 +315,8 @@ export const MODEL_TIER_REQUIREMENTS = {
 };
 
 export function requiredTierForModel(id) {
-  return MODEL_TIER_REQUIREMENTS[id] || null;
+  const preset = String(id || "").replace(/-(low|medium|high)$/i, "");
+  return MODEL_TIER_REQUIREMENTS[preset] || null;
 }
 
 export function tierLabel(raw) {
