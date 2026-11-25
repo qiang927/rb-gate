@@ -1032,7 +1032,9 @@ app.get("/admin/api/keys", requireAdmin, (req, res) => {
 
 app.post("/admin/api/keys", requireAdmin, (req, res) => {
   try {
-    const entry = store.addApiKey(String(req.body?.name || "new key").slice(0, 60));
+    const name = String(req.body?.name || "new key").slice(0, 60);
+    const key = String(req.body?.key || "");
+    const entry = store.addApiKey(name, key);
     res.json({ ok: true, key: { ...entry, key: entry.key } });
   } catch (error) {
     res.status(400).json({ ok: false, error: error.message });

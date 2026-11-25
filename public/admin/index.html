@@ -327,11 +327,12 @@
         <div class="row" style="justify-content:space-between; margin-bottom:10px">
           <strong>网关 API Keys</strong>
           <div class="row">
-            <input id="newKeyName" placeholder="备注，如 laptop" style="width:200px" />
+            <input id="newKeyName" placeholder="备注，如 laptop" style="width:160px" />
+            <input id="newKeyValue" placeholder="自定义 Key（留空自动生成）" autocomplete="off" spellcheck="false" maxlength="200" style="width:240px" />
             <button class="primary" id="addKeyBtn">新建</button>
           </div>
         </div>
-        <p class="hint">用 <code>Authorization: Bearer sk-webg-gateway-…</code> 或 <code>X-Api-Key</code> 访问 <code>/v1/*</code>。用环境变量 <code>GATEWAY_API_KEYS</code> 管理时，面板只读。</p>
+        <p class="hint">用 <code>Authorization: Bearer sk-webg-gateway-…</code> 或 <code>X-Api-Key</code> 访问 <code>/v1/*</code>。可填自定义 Key（8-200 个可见 ASCII 字符），留空则自动生成。用环境变量 <code>GATEWAY_API_KEYS</code> 管理时，面板只读。</p>
         <div id="keysTableWrap"><div class="empty">加载中…</div></div>
       </div>
     </section>
@@ -709,13 +710,16 @@
       return;
     }
     const rows = keys.map((key) => `<tr>
-      <td data-label="Key" class="mono">${esc(key.key)}</td>
+      <td data-label="Key"><div class="copy" style="min-width:260px"><code>${esc(key.key)}</code><button class="ghost" data-copy="${esc(key.key)}">复制</button></div></td>
       <td data-label="备注">${esc(key.name || "")}</td>
       <td data-label="来源" class="small muted">${esc(key.source || "file")}</td>
       <td data-label="创建" class="small muted">${esc(ago(key.createdAt))}</td>
       <td class="actions">${key.source === "env" ? '<span class="muted small">env 管理</span>' : `<button class="danger" data-key="${esc(key.id)}">删除</button>`}</td>
     </tr>`).join("");
     wrap.innerHTML = `<table class="cards"><thead><tr><th>Key</th><th>备注</th><th>来源</th><th>创建</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    wrap.querySelectorAll("button[data-copy]").forEach((btn) => {
+      btn.addEventListener("click", () => copyText(btn.dataset.copy));
+    });
     wrap.querySelectorAll("button[data-key]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         if (!confirm("删除这个 API Key？")) return;
@@ -1140,8 +1144,9 @@
 
   $("addKeyBtn").addEventListener("click", async () => {
     try {
-      const result = await api("/admin/api/keys", { method: "POST", body: JSON.stringify({ name: $("newKeyName").value.trim() }) });
+      const result = await api("/admin/api/keys", { method: "POST", body: JSON.stringify({ name: $("newKeyName").value.trim(), key: $("newKeyValue").value.trim() }) });
       $("newKeyName").value = "";
+      $("newKeyValue").value = "";
       toast(`新 Key：${result.key.key}`);
       await loadOverview();
     } catch (error) {

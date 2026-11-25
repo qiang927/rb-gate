@@ -242,11 +242,23 @@ class Store {
     return this.apiKeys().find((entry) => entry.hash === hash) || null;
   }
 
-  addApiKey(name) {
+  addApiKey(name, customKey = "") {
     if (config.apiKeys.length) {
       throw new Error("API keys are managed by the GATEWAY_API_KEYS environment variable");
     }
-    const key = `sk-webg-gateway-${randomToken(24)}`;
+    const custom = String(customKey || "").trim();
+    if (custom) {
+      if (custom.length < 8 || custom.length > 200) {
+        throw new Error("API Key 长度需在 8-200 个字符之间");
+      }
+      if (!/^[\x21-\x7e]+$/.test(custom)) {
+        throw new Error("API Key 只能包含可见 ASCII 字符，不能有空格");
+      }
+      if (this.apiKeys().some((entry) => entry.hash === sha256(custom))) {
+        throw new Error("这个 API Key 已存在");
+      }
+    }
+    const key = custom || `sk-webg-gateway-${randomToken(24)}`;
     const entry = { id: randomId("key"), name: name || "new key", key, hash: sha256(key), createdAt: new Date().toISOString() };
     const keys = [...this.apiKeys().filter((item) => item.source !== "env"), entry];
     this.apiKeyCache = keys;

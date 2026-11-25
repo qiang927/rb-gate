@@ -28,3 +28,9 @@ test("admin OpenAI base URL is derived from the current page URL", () => {
   assert.equal(base("/gateway/admin/"), "https://example.com/gateway/v1");
   assert.equal(base("/"), "https://example.com/v1");
 });
+
+test("admin API key form supports custom values and copying", () => {
+  const html = fs.readFileSync(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  assert.match(html, /id="newKeyValue"/);
+  assert.match(html, /data-copy=/);
+});

@@ -74,7 +74,7 @@ OpenAI 兼容响应（流式 / 非流式）
 
 5. 构建完成后打开 Render 给的地址 → `地址/admin/` → 登录。
 6. 「凭证」→ 粘贴 `gemini.google.com` 的 Cookie → 验证并导入。
-7. 「API Keys」→ 新建 → 复制 `sk-webg-gateway-...`。
+7. 「API Keys」→ 填备注 + 可选自定义 Key（留空自动生成）→ 新建 → 点行内「复制」。
 8. 客户端 Base URL 填 `https://<你的地址>/v1`。
 
 ---
