@@ -15,7 +15,7 @@ import {
   openaiSseHeaders,
 } from "./translate.js";
 import { logAi, logError, logInfo, logWarn, recentLogs } from "./logger.js";
-import { initProxyPool, isAbuseBlock, proxyPool } from "./proxypool.js";
+import { beginAiRequest, endAiRequest, initProxyPool, isAbuseBlock, proxyPool } from "./proxypool.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -366,6 +366,18 @@ app.get("/v1/models/:id", async (req, res) => {
   return sendOpenaiError(res, 404, `model ${req.params.id} not found`, { code: "model_not_found" });
 });
 
+// Every chat completion counts as an in-flight AI request while it runs. The
+// proxy pool uses this to postpone auto-fastest switching until the response
+// is finished, so a node change cannot break a running stream.
+async function withAiRequestTracking(handler, ...args) {
+  beginAiRequest();
+  try {
+    return await handler(...args);
+  } finally {
+    endAiRequest();
+  }
+}
+
 function rejectChatRequest(req, res, status, message, code) {
   logAi("rejected", {
     id: req.requestId,
@@ -378,7 +390,12 @@ function rejectChatRequest(req, res, status, message, code) {
   return sendOpenaiError(res, status, message, { code });
 }
 
-app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
+app.post("/v1/chat/completions", requireApiKey, (req, res) => withAiRequestTracking(handleChatCompletions, req, res));
+
+// The whole route counts as one in-flight AI request, including credential and
+// model catalog resolution: those lookups also use the outbound proxy, so an
+// auto-fastest switch in the middle would break the request before it starts.
+async function handleChatCompletions(req, res) {
   req.requestId = `req_${crypto.randomBytes(6).toString("hex")}`;
   res.setHeader("X-Request-Id", req.requestId);
   const body = req.body || {};
@@ -398,7 +415,7 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
     return rejectChatRequest(req, res, error.status || 502, error.message, error.code || "web_error");
   }
   return handleWebChat(req, res, body, resolved, stream);
-});
+}
 
 
 const webSessions = new Map();
@@ -960,6 +977,15 @@ app.post("/admin/api/proxy/import", requireAdmin, async (req, res) => {
     res.json({ ok: true, proxy: status });
   } catch (error) {
     logWarn(`proxy pool import failed: ${error.message}`);
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/admin/api/proxy/fastest", requireAdmin, (req, res) => {
+  try {
+    const proxy = proxyPool.configureFastest(req.body?.minutes);
+    res.json({ ok: true, proxy });
+  } catch (error) {
     res.status(400).json({ ok: false, error: error.message });
   }
 });

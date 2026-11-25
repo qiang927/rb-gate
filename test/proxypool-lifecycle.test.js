@@ -141,4 +141,14 @@ test("proxy pool keeps the default group across stop and supports deleting nodes
   assert.equal(proxyPool.running, false);
   assert.equal(store.settings().proxyEnabled, true);
   assert.deepEqual(proxyPool.status().nodes, ["node-a", "node-b", "node-c"]);
+
+  // 自动切最快节点的间隔可在面板里改成任意 1–1440 分钟，并持久化到设置。
+  const configured = proxyPool.configureFastest(5);
+  assert.equal(configured.fastest.minutes, 5);
+  assert.equal(configured.fastest.enabled, false);
+  assert.equal(store.settings().proxyFastestMinutes, 5);
+  assert.equal(proxyPool.status().fastest.minutes, 5);
+  assert.throws(() => proxyPool.configureFastest(0), /1–1440/);
+  assert.throws(() => proxyPool.configureFastest(1441), /1–1440/);
+  assert.throws(() => proxyPool.configureFastest("abc"), /必须是数字/);
 });

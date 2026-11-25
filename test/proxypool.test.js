@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildMihomoConfig,
+  fastestMinutes,
   filterRemovedNodes,
   isInfoNode,
+  normalizeFastestMinutes,
   parseClashConfig,
   shouldAutoStart,
 } from "../src/proxypool.js";
@@ -78,4 +80,20 @@ test("info nodes are dropped from subscriptions", () => {
 `);
   assert.equal(parsed.nodes.length, 1);
   assert.equal(parsed.nodes[0].name, "CF 移动优选");
+});
+
+test("auto fastest interval is user configurable in whole minutes", () => {
+  assert.equal(normalizeFastestMinutes(5), 5);
+  assert.equal(normalizeFastestMinutes("7"), 7);
+  assert.equal(normalizeFastestMinutes(2.6), 3);
+  assert.equal(normalizeFastestMinutes(1), 1);
+  assert.equal(normalizeFastestMinutes(1440), 1440);
+  assert.throws(() => normalizeFastestMinutes(0), /1–1440/);
+  assert.throws(() => normalizeFastestMinutes(1441), /1–1440/);
+  assert.throws(() => normalizeFastestMinutes("abc"), /必须是数字/);
+
+  assert.equal(fastestMinutes({ proxyFastestMinutes: 25 }), 25);
+  assert.equal(fastestMinutes({ proxyFastestMinutes: "3" }), 3);
+  assert.ok(fastestMinutes({ proxyFastestMinutes: 0 }) >= 1);
+  assert.ok(fastestMinutes({ proxyFastestMinutes: 9999 }) >= 1);
 });

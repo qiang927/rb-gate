@@ -14,6 +14,62 @@ const GROUP = "POOL";
 const GROUP_NAME = "默认分组";
 const TEST_URL = "https://www.gstatic.com/generate_204";
 
+const FASTEST_MIN_MINUTES = 1;
+const FASTEST_MIN_MAX = 1440;
+const FASTEST_RETRY_MS = 5_000;
+
+// Chat completions currently in flight. Auto-fastest must never switch the
+// outbound node in the middle of a response: the stream would break when the
+// network path changes underneath it.
+let aiInFlight = 0;
+const aiIdleListeners = new Set();
+
+export function beginAiRequest() {
+  aiInFlight += 1;
+  return aiInFlight;
+}
+
+export function endAiRequest() {
+  if (aiInFlight > 0) aiInFlight -= 1;
+  if (aiInFlight === 0) {
+    for (const listener of [...aiIdleListeners]) {
+      try {
+        listener();
+      } catch (error) {
+        logWarn(`proxy pool: AI idle listener failed: ${error.message}`);
+      }
+    }
+  }
+  return aiInFlight;
+}
+
+export function aiRequestsInFlight() {
+  return aiInFlight;
+}
+
+function onAiIdle(listener) {
+  aiIdleListeners.add(listener);
+  return () => aiIdleListeners.delete(listener);
+}
+
+export function normalizeFastestMinutes(value) {
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes)) throw new Error("自动测速间隔必须是数字（分钟）");
+  const rounded = Math.round(minutes);
+  if (rounded < FASTEST_MIN_MINUTES || rounded > FASTEST_MIN_MAX) {
+    throw new Error(`自动测速间隔需在 ${FASTEST_MIN_MINUTES}–${FASTEST_MIN_MAX} 分钟之间`);
+  }
+  return rounded;
+}
+
+export function fastestMinutes(settings = store.settings() || {}) {
+  const saved = Number(settings?.proxyFastestMinutes);
+  if (Number.isFinite(saved) && saved >= FASTEST_MIN_MINUTES && saved <= FASTEST_MIN_MAX) {
+    return Math.round(saved);
+  }
+  return Math.max(FASTEST_MIN_MINUTES, Math.round(config.autoFastestMs / 60_000));
+}
+
 function subscriptionUrl(input) {
   const raw = String(input || "").trim();
   if (!raw) return "";
@@ -140,6 +196,9 @@ export class ProxyPool {
     this.subscription = String(store.settings()?.proxySubscription || "");
     this.startedAt = 0;
     this.fastestTimer = null;
+    this.fastestRetryTimer = null;
+    this.fastestIdleUnwatch = null;
+    this.fastestDeferredAt = 0;
     this.fastestAt = 0;
     this.fastestNode = "";
   }
@@ -389,6 +448,44 @@ export class ProxyPool {
     return results;
   }
 
+  #clearFastestRetry() {
+    if (this.fastestRetryTimer) {
+      clearTimeout(this.fastestRetryTimer);
+      this.fastestRetryTimer = null;
+    }
+    if (this.fastestIdleUnwatch) {
+      this.fastestIdleUnwatch();
+      this.fastestIdleUnwatch = null;
+    }
+  }
+
+  #deferFastest(reason) {
+    this.fastestDeferredAt = Date.now();
+    logInfo(`proxy pool: auto fastest deferred (${reason})`);
+    if (this.fastestIdleUnwatch) return;
+    let unwatch = null;
+    unwatch = onAiIdle(() => {
+      if (this.fastestIdleUnwatch === unwatch) this.fastestIdleUnwatch = null;
+      unwatch();
+      this.#scheduleFastestRetry();
+    });
+    this.fastestIdleUnwatch = unwatch;
+  }
+
+  #scheduleFastestRetry() {
+    if (!this.running || !config.autoFastest) return;
+    if (this.fastestRetryTimer) clearTimeout(this.fastestRetryTimer);
+    this.fastestRetryTimer = setTimeout(() => {
+      this.fastestRetryTimer = null;
+      if (aiRequestsInFlight() > 0) {
+        this.#deferFastest(`${aiRequestsInFlight()} AI request(s) still in flight`);
+        return;
+      }
+      void this.pickFastest();
+    }, FASTEST_RETRY_MS);
+    if (typeof this.fastestRetryTimer?.unref === "function") this.fastestRetryTimer.unref();
+  }
+
   async #stopProcess() {
     const child = this.child;
     this.child = null;
@@ -410,6 +507,8 @@ export class ProxyPool {
       clearInterval(this.fastestTimer);
       this.fastestTimer = null;
     }
+    this.#clearFastestRetry();
+    this.fastestDeferredAt = 0;
     setOutboundProxy("");
   }
 
@@ -456,24 +555,44 @@ export class ProxyPool {
     return { name: target, delay: out?.delay ?? null };
   }
 
-  #scheduleFastest() {
+  #scheduleFastest({ firstDelayMs = 20_000 } = {}) {
     if (!config.autoFastest) return;
+    this.#clearFastestRetry();
     if (this.fastestTimer) {
       clearTimeout(this.fastestTimer);
       clearInterval(this.fastestTimer);
     }
     this.fastestTimer = null;
+    const intervalMs = fastestMinutes() * 60_000;
     const first = setTimeout(() => {
       void this.pickFastest();
-      this.fastestTimer = setInterval(() => void this.pickFastest(), config.autoFastestMs);
+      this.fastestTimer = setInterval(() => void this.pickFastest(), intervalMs);
       if (typeof this.fastestTimer?.unref === "function") this.fastestTimer.unref();
-    }, 20_000);
+    }, firstDelayMs);
     if (typeof first.unref === "function") first.unref();
     this.fastestTimer = first;
   }
 
+  configureFastest(value) {
+    const minutes = normalizeFastestMinutes(value);
+    store.updateSettings({ proxyFastestMinutes: minutes });
+    logInfo(`proxy pool: auto fastest interval set to ${minutes} minutes`);
+    if (this.running) {
+      this.fastestDeferredAt = 0;
+      this.#scheduleFastest({ firstDelayMs: minutes * 60_000 });
+    }
+    return this.status();
+  }
+
   async pickFastest() {
     if (!this.running || this.nodes.length < 2) return "";
+    if (aiRequestsInFlight() > 0) {
+      this.#deferFastest(`${aiRequestsInFlight()} AI request(s) in flight`);
+      return "";
+    }
+    // The deferred switch is being retried now; clear the stale marker. It is
+    // set again below if a new AI request starts while we measure.
+    this.fastestDeferredAt = 0;
     let results;
     try {
       results = await this.testAll();
@@ -481,12 +600,22 @@ export class ProxyPool {
       logWarn(`proxy pool: auto speed test failed: ${error.message}`);
       return "";
     }
+    if (!this.running) return "";
+    if (aiRequestsInFlight() > 0) {
+      this.#deferFastest("AI request started during the speed test");
+      return "";
+    }
     const usable = results.filter((item) => item.ok && item.delay > 0).sort((a, b) => a.delay - b.delay);
     if (!usable.length) return "";
     const best = usable[0];
     this.fastestAt = Date.now();
     this.fastestNode = best.name;
+    this.#clearFastestRetry();
     if (best.name !== this.current) {
+      if (aiRequestsInFlight() > 0) {
+        this.#deferFastest("AI request started during the speed test");
+        return "";
+      }
       try {
         await this.select(best.name);
         logInfo(`proxy pool: auto switched to fastest node ${best.name} (${best.delay}ms)`);
@@ -502,6 +631,7 @@ export class ProxyPool {
     const configured = this.subscription || String(settings.proxySubscription || "").trim();
     const cached = Array.isArray(settings.proxyNodes) ? settings.proxyNodes : [];
     const nodes = this.nodes.length ? [...this.nodes] : cached.map(String);
+    const minutes = fastestMinutes(settings);
     return {
       running: this.running,
       group: GROUP_NAME,
@@ -515,9 +645,12 @@ export class ProxyPool {
       removed: (settings.proxyRemoved || []).length,
       fastest: {
         enabled: config.autoFastest,
-        intervalMs: config.autoFastestMs,
+        minutes,
+        intervalMs: minutes * 60_000,
         lastAt: this.fastestAt,
         node: this.fastestNode,
+        activeRequests: aiRequestsInFlight(),
+        deferredAt: this.fastestDeferredAt,
       },
       binary: config.mihomoPath,
     };

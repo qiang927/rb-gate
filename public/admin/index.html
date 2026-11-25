@@ -150,6 +150,7 @@
   .input-row input { flex: 1; min-width: 0; }
   .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
   .toolbar .spacer { flex: 1; }
+  .fastest-row input { width: 88px; flex: 0 0 auto; }
   .search { max-width: 200px; }
   .meta-row { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 14px; font-size: 12px; color: var(--muted); }
   .meta-row b { color: var(--text); font-weight: 600; }
@@ -395,6 +396,14 @@
             <button id="proxyStopBtn" class="ghost" disabled>停止</button>
             <span class="spacer"></span>
             <input id="proxySearch" class="search" placeholder="搜索节点…" />
+          </div>
+
+          <div class="toolbar fastest-row">
+            <span class="hint">自动切最快节点</span>
+            <input id="proxyFastestMinutes" type="number" min="1" max="1440" step="1" value="10" aria-label="自动切最快节点的分钟数" />
+            <span class="hint">分钟一次</span>
+            <button id="proxyFastestSaveBtn">保存</button>
+            <span class="hint">1–1440 分钟；AI 回复未完成时会延后切换</span>
           </div>
 
           <div id="proxyMeta" class="meta-row"></div>
@@ -851,6 +860,12 @@
     $("proxyRemoveAllBtn").title = nodes.length ? "删除默认分组里的全部节点" : "分组里没有节点";
     $("proxyTestAllBtn").disabled = !running || !nodes.length;
     $("proxyRotateBtn").disabled = !running || nodes.length < 2;
+    const fastestEnabled = proxy?.fastest?.enabled !== false;
+    $("proxyFastestMinutes").disabled = !fastestEnabled;
+    $("proxyFastestSaveBtn").disabled = !fastestEnabled;
+    $("proxyFastestMinutes").title = fastestEnabled
+      ? "1–1440 分钟；AI 回复未完成时会延后切换"
+      : "已被环境变量 AUTO_FASTEST=0 关闭";
 
     const toggle = $("proxyStopBtn");
     toggle.textContent = running ? "停止" : "启用";
@@ -885,7 +900,12 @@
     const meta = $("proxyMeta");
     const nodes = proxy.nodes || [];
     const fastest = proxy.fastest || {};
-    const everyMin = Math.max(1, Math.round((fastest.intervalMs || 600000) / 60000));
+    const everyMin = Math.max(
+      1,
+      Math.round(Number(fastest.minutes) || (fastest.intervalMs || 600000) / 60000),
+    );
+    const fastestInput = $("proxyFastestMinutes");
+    if (document.activeElement !== fastestInput) fastestInput.value = String(everyMin);
     const parts = [];
     if (proxy.running) {
       parts.push(`<span>当前 <b>${esc(proxy.current || "—")}</b></span>`);
@@ -893,6 +913,11 @@
       parts.push(
         `<span>自动测速 <b>${fastest.enabled ? `每 ${everyMin} 分钟` : "关闭"}</b>${fastest.lastAt ? `（上次 ${esc(fastest.node || "-")}）` : ""}</span>`,
       );
+      if (fastest.enabled && fastest.activeRequests) {
+        parts.push(`<span>AI 回复中 <b>${fastest.activeRequests}</b> 个，暂缓切换</span>`);
+      } else if (fastest.enabled && fastest.deferredAt) {
+        parts.push(`<span>切换已延后，稍后自动重试</span>`);
+      }
     } else {
       const label = proxy.hasSubscription
         ? nodes.length
@@ -1026,6 +1051,33 @@
     } finally {
       syncProxyControls();
     }
+  });
+  async function saveFastestMinutes() {
+    const minutes = Number($("proxyFastestMinutes").value);
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+      return toast("自动测速间隔请填 1–1440 的整数分钟", true);
+    }
+    const btn = $("proxyFastestSaveBtn");
+    btn.disabled = true;
+    btn.textContent = "保存中…";
+    try {
+      const result = await api("/admin/api/proxy/fastest", {
+        method: "POST",
+        body: JSON.stringify({ minutes }),
+      });
+      renderProxy(result.proxy || {});
+      toast(`已设置：每 ${result.proxy?.fastest?.minutes ?? minutes} 分钟自动切到最快节点`);
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      btn.textContent = "保存";
+      syncProxyControls();
+    }
+  }
+
+  $("proxyFastestSaveBtn").addEventListener("click", saveFastestMinutes);
+  $("proxyFastestMinutes").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") saveFastestMinutes();
   });
   $("proxyRefreshBtn").addEventListener("click", loadProxy);
   $("proxySearch").addEventListener("input", renderProxyNodes);
