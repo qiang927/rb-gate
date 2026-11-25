@@ -1,4 +1,4 @@
-# robin-gateway container.
+# webg-gateway container.
 #
 # One Node process serves two channels:
 #   web-*     Gemini web (gemini.google.com) straight from browser cookies

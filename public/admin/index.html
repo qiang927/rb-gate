@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>robin gateway · 控制台</title>
+<title>webg-gateway · 控制台</title>
 <style>
   :root {
     color-scheme: dark;
@@ -101,7 +101,7 @@
   .badge.active { color: var(--green); border-color: #1f4735; background: #0f1f18; }
   .badge.error { color: var(--red); border-color: #4a2727; background: #1f1010; }
   .badge.disabled { color: var(--muted); }
-  .badge.robin { color: #9db4ff; border-color: #2a3760; background: #121a30; }
+  .badge.webg-gateway { color: #9db4ff; border-color: #2a3760; background: #121a30; }
   .badge.tier-free { color: #9aa4b2; border-color: #2c3340; }
   .badge.tier-pro { color: #7fd3ff; border-color: #1f4a5e; background: #0d1e27; }
   .badge.tier-ultra { color: #d9a6ff; border-color: #4a2a67; background: #1c1026; }
@@ -212,9 +212,9 @@
 <body>
 <div class="wrap">
   <header class="top">
-    <div class="logo">R</div>
+    <div class="logo">W</div>
     <div>
-      <h1>robin gateway</h1>
+      <h1>webg-gateway</h1>
       <div class="sub">Gemini 网页版 → OpenAI 兼容 · 多 Cookie 轮换</div>
     </div>
     <div class="spacer"></div>
@@ -253,7 +253,7 @@
           </div>
         </div>
         <div class="hint" style="max-width:330px">
-          Base URL 填上面这个地址，API Key 用「API Keys」页里的 <code>sk-robin-…</code>；模型名见「模型」页。
+          Base URL 填上面这个地址，API Key 用「API Keys」页里的 <code>sk-webg-gateway-…</code>；模型名见「模型」页。
         </div>
       </div>
     </div>
@@ -273,7 +273,7 @@
         <div class="card">
           <div class="row" style="justify-content:space-between; margin-bottom:8px">
             <strong>Gemini 网页版 Cookie</strong>
-            <span class="badge robin">web-* 直连</span>
+            <span class="badge webg-gateway">web-* 直连</span>
           </div>
           <p class="hint">
             粘贴浏览器里 <code>gemini.google.com</code> 的 Cookie（<strong>不是</strong> <code>aistudio.google.com</code> 的），
@@ -292,7 +292,7 @@
         <div class="card">
           <div class="row" style="justify-content:space-between; margin-bottom:8px">
             <strong>pggo（AI Studio Cookie）</strong>
-            <span class="badge robin">pggo-* 直连</span>
+            <span class="badge webg-gateway">pggo-* 直连</span>
           </div>
           <p class="hint">
             粘贴浏览器里 <code>aistudio.google.com</code> 的 Cookie（<strong>不是</strong> gemini.google.com 的）。
@@ -331,7 +331,7 @@
             <button class="primary" id="addKeyBtn">新建</button>
           </div>
         </div>
-        <p class="hint">用 <code>Authorization: Bearer sk-robin-…</code> 或 <code>X-Api-Key</code> 访问 <code>/v1/*</code>。用环境变量 <code>GATEWAY_API_KEYS</code> 管理时，面板只读。</p>
+        <p class="hint">用 <code>Authorization: Bearer sk-webg-gateway-…</code> 或 <code>X-Api-Key</code> 访问 <code>/v1/*</code>。用环境变量 <code>GATEWAY_API_KEYS</code> 管理时，面板只读。</p>
         <div id="keysTableWrap"><div class="empty">加载中…</div></div>
       </div>
     </section>
@@ -565,7 +565,7 @@
   }
 
   const CRED_GROUPS = [
-    { id: "robin", title: "Gemini 网页版 Cookie", note: "浏览器 Cookie 直连，驱动 web-* 模型。" },
+    { id: "webg-gateway", title: "Gemini 网页版 Cookie", note: "浏览器 Cookie 直连，驱动 web-* 模型。" },
     { id: "pggo", title: "pggo（AI Studio Cookie）", note: "MakerSuite RPC + 服务端 WAA 签名，驱动 pggo-* 模型。" },
   ];
 
@@ -600,7 +600,7 @@
         <div><strong>${esc(cred.label || cred.email || cred.id)}</strong></div>
         <div class="small muted">${esc(cred.email || "")}</div>
       </td>
-      <td data-label="类型"><span class="badge robin">${cred.group === "aistudio" || cred.group === "pggo" ? "pggo" : cred.hasWebCookie ? "cookie" : esc(cred.type)}</span></td>
+      <td data-label="类型"><span class="badge webg-gateway">${cred.group === "aistudio" || cred.group === "pggo" ? "pggo" : cred.hasWebCookie ? "cookie" : esc(cred.type)}</span></td>
       <td data-label="状态"><span class="badge ${statusClass}">${statusText}</span></td>
       <td data-label="档位" class="small">${tierBadge(cred)}</td>
       <td data-label="额度" class="small">${quotaCell(cred.usage)}</td>
@@ -628,9 +628,9 @@
       wrap.innerHTML = '<div class="empty">还没有凭证。在上方粘贴 Gemini 网页版或 pggo（AI Studio）的 Cookie 导入。</div>';
       return;
     }
-    const byGroup = { robin: [], pggo: [] };
+    const byGroup = { webg-gateway: [], pggo: [] };
     for (const cred of creds) {
-      const group = cred.group === "aistudio" || cred.group === "pggo" ? "pggo" : "robin";
+      const group = cred.group === "aistudio" || cred.group === "pggo" ? "pggo" : "webg-gateway";
       byGroup[group].push(cred);
     }
     wrap.innerHTML = CRED_GROUPS.map((group) => {
@@ -920,7 +920,7 @@
       const active = proxy.running && name === proxy.current;
       const fastest = proxy.running && proxy.fastest && proxy.fastest.node === name;
       return `<div class="node${active ? " active" : ""}">
-        <span class="name mono" title="${esc(name)}">${esc(name)}${active ? ' <span class="badge robin">当前</span>' : ""}${fastest ? ' <span class="badge active">最快</span>' : ""}</span>
+        <span class="name mono" title="${esc(name)}">${esc(name)}${active ? ' <span class="badge webg-gateway">当前</span>' : ""}${fastest ? ' <span class="badge active">最快</span>' : ""}</span>
         <span class="actions">
           ${proxy.running ? delayBadge(name) : ""}
           <button data-proxy-node="${esc(name)}"${proxy.running ? "" : " disabled"} title="${proxy.running ? "切换到这个节点" : "代理池已停止，启用后可切换"}">使用</button>

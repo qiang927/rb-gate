@@ -1,11 +1,11 @@
-# Render Blueprint for robin-gateway.
+# Render Blueprint for webg-gateway.
 #
 # Free instances have NO persistent disk: imported credentials and API keys
 # live in DATA_DIR and disappear on every redeploy/restart. Use `plan: starter`
 # (and uncomment the disk block) if you want the credential pool to survive.
 services:
   - type: web
-    name: robin-gateway
+    name: webg-gateway
     runtime: docker
     plan: free
     healthCheckPath: /health
@@ -19,7 +19,7 @@ services:
       - key: DATA_DIR
         value: /data
     # disk:
-    #   name: robin-data
+    #   name: webg-gateway-data
     #   mountPath: /data
     #   sizeGB: 1
     #

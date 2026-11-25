@@ -34,7 +34,7 @@ before(async () => {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${server.address().port}`;
   process.env.UPSTREAM_BASE = base;
-  process.env.DATA_DIR = "/tmp/robin-gateway-test-data";
+  process.env.DATA_DIR = "/tmp/webg-gateway-test-data";
 });
 
 after(() => new Promise((resolve) => server.close(resolve)));

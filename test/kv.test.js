@@ -55,13 +55,13 @@ test("kvConfigured requires the three credentials", async () => {
 
 test("put/get/delete round trip", async () => {
   const { kvPut, kvGet, kvDelete } = await import("../src/kv.js");
-  await kvPut("robin/test", JSON.stringify({ a: 1 }));
-  assert.equal(await kvGet("robin/test"), JSON.stringify({ a: 1 }));
-  await kvDelete("robin/test");
-  assert.equal(await kvGet("robin/test"), null);
+  await kvPut("webg-gateway/test", JSON.stringify({ a: 1 }));
+  assert.equal(await kvGet("webg-gateway/test"), JSON.stringify({ a: 1 }));
+  await kvDelete("webg-gateway/test");
+  assert.equal(await kvGet("webg-gateway/test"), null);
 });
 
 test("get returns null for a missing key", async () => {
   const { kvGet } = await import("../src/kv.js");
-  assert.equal(await kvGet("robin/nope"), null);
+  assert.equal(await kvGet("webg-gateway/nope"), null);
 });

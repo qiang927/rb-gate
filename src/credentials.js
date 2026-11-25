@@ -21,11 +21,11 @@ function fail(message, cause) {
   return error;
 }
 
-function robinOptions(cred) {
+function webgGatewayOptions(cred) {
   return {
-    scopes: cred.scopes || config.robinScopes,
-    app: cred.app || config.robinApp,
-    clientSig: cred.clientSig || config.robinClientSig,
+    scopes: cred.scopes || config.webgGatewayScopes,
+    app: cred.app || config.webgGatewayApp,
+    clientSig: cred.clientSig || config.webgGatewayClientSig,
   };
 }
 
@@ -49,10 +49,10 @@ export async function ensureAccessToken(cred) {
   }
 
   if (!cred.masterTokenEnc) {
-    throw fail("robin credential has no master token; import it again with an oauth_token");
+    throw fail("webg-gateway credential has no master token; import it again with an oauth_token");
   }
   const masterToken = decryptString(cred.masterTokenEnc, config.dataDir);
-  const minted = await mintBearer(cred.email, masterToken, cred.androidId, robinOptions(cred));
+  const minted = await mintBearer(cred.email, masterToken, cred.androidId, webgGatewayOptions(cred));
   const expiresAt = minted.expiryEpochSeconds
     ? Math.max(Date.now() + 60_000, minted.expiryEpochSeconds * 1000 - TOKEN_SKEW_MS)
     : Date.now() + 55 * 60 * 1000;
@@ -134,8 +134,8 @@ export async function importWebCookie({ email = "", cookie, label = "" }) {
     );
   }
   const credential = store.upsertCredential({
-    type: "robin",
-    group: "robin",
+    type: "webg-gateway",
+    group: "webg-gateway",
     email,
     label,
     webCookie: raw,

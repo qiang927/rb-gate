@@ -4,7 +4,7 @@ import https from "node:https";
 /**
  * A dependency-free port of gpsoauth 3.0.1 (simon-weber/gpsoauth, MIT).
  *
- * Two flows are used by Robin-style credential import:
+ * Two flows are used for webg-gateway credential import:
  *   1. exchangeToken(email, oauthToken, androidId)
  *        Single-use web oauth_token (accounts.google.com EmbeddedSetup cookie,
  *        value starts with "oauth2_4/") -> durable master token ("oauth2rt_1/...").

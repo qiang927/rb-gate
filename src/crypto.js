@@ -29,10 +29,10 @@ export function getEncryptionKey(dataDir) {
   if (source) {
     // Accept hex, base64 or an arbitrary passphrase; normalize through scrypt.
     const material = /^[0-9a-f]{64}$/i.test(source) ? Buffer.from(source, "hex") : Buffer.from(source, "utf8");
-    cachedKey = crypto.scryptSync(material, "robin-gateway-v1", 32);
+    cachedKey = crypto.scryptSync(material, "webg-gateway-v1", 32);
   } else {
     const secret = loadOrCreateSecretFile(dataDir, "secret.key", 32);
-    cachedKey = crypto.scryptSync(secret, "robin-gateway-v1", 32);
+    cachedKey = crypto.scryptSync(secret, "webg-gateway-v1", 32);
   }
   cachedDataDir = dataDir;
   return cachedKey;

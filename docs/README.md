@@ -49,19 +49,19 @@ Fork 仓库 → 建 Cloudflare KV（可选） → Render 建 Web Service（Docke
 5. 等构建完成，打开 Render 服务页顶部那个 URL —— **注意它长这样**：
 
    ```
-   https://rb-gate.onrender.com        ← 服务名你起的
-   https://rb-gate-9x2k.onrender.com   ← 名字被占时自动加后缀
+   https://webg-gateway.onrender.com        ← 服务名你起的
+   https://webg-gateway-9x2k.onrender.com   ← 名字被占时自动加后缀
    ```
 
    **不是** `https://<你的Render用户名>.onrender.com`。以 Dashboard 显示为准。
 6. 打开 `地址/admin/` → 用 `ADMIN_PASSWORD` 登录。
 7. 「凭证」→ 粘贴 `gemini.google.com` 的 Cookie → **验证并导入**。
-8. 「API Keys」→ 新建 → 复制 `sk-robin-...`。
+8. 「API Keys」→ 新建 → 复制 `sk-webg-gateway-...`。
 9. 用 curl 测试：
 
    ```bash
    curl https://<你的地址>/v1/chat/completions \
-     -H "Authorization: Bearer sk-robin-..." \
+     -H "Authorization: Bearer sk-webg-gateway-..." \
      -H "Content-Type: application/json" \
      -d '{"model":"web-gemini-4-hydrogen","messages":[{"role":"user","content":"你好"}]}'
    ```
@@ -81,4 +81,4 @@ Fork 仓库 → 建 Cloudflare KV（可选） → Render 建 Web Service（Docke
 - **Cookie**：Gemini 网页版登录态，等价于账号在该站点的权限。
 - **凭证（credential）**：面板里的一条 Cookie 记录，可测试/禁用/删除。
 - **代理池**：服务端内置 mihomo 内核，用 Clash 订阅的多个节点出站，用来绕开 Google 的 IP 风控。
-- **API Key**：给客户端用的 `sk-robin-...`，和 Google 无关。
+- **API Key**：给客户端用的 `sk-webg-gateway-...`，和 Google 无关。

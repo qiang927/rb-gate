@@ -82,7 +82,7 @@ function requireApiKey(req, res, next) {
 // ---------------------------------------------------------------------------
 // Admin sessions (signed cookie, no server-side state)
 // ---------------------------------------------------------------------------
-const ADMIN_COOKIE = "robin_admin";
+const ADMIN_COOKIE = "webg-gateway_admin";
 const SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
 
 function secret() {
@@ -137,7 +137,7 @@ function webModelEntries() {
       object: "model",
       created: 1735689600,
       owned_by: "google-web",
-      groups: ["robin"],
+      groups: ["webg-gateway"],
       metadata: {
         mode: cfg.mode,
         preset: cfg.preset,
@@ -181,7 +181,7 @@ app.get("/health", (req, res) => {
   const credentials = store.listCredentials();
   res.json({
     ok: true,
-    service: "robin-gateway",
+    service: "webg-gateway",
     version: "0.1.0",
     credentials: {
       total: credentials.length,
@@ -351,7 +351,7 @@ function findWebCredential() {
   // one is exhausted (the upstream may still allow a little overage).
   const withQuota = usable.filter((cred) => !usageExhausted(cred.usage));
   const candidates = withQuota.length ? withQuota : usable;
-  // Least-recently used first, so multiple robin credentials rotate.
+  // Least-recently used first, so multiple webg-gateway credentials rotate.
   candidates.sort((a, b) => String(a.lastUsedAt || "").localeCompare(String(b.lastUsedAt || "")));
   return candidates[0];
 }
@@ -434,7 +434,7 @@ function webPrompt(messages) {
 async function handleWebChat(req, res, body, model, stream, thinking = null) {
   const cred = findWebCredential();
   if (!cred) {
-    return sendOpenaiError(res, 503, "no web credential: import a robin credential (oauth_token) first", { code: "no_web_credential" });
+    return sendOpenaiError(res, 503, "no web credential: import a webg-gateway credential (oauth_token) first", { code: "no_web_credential" });
   }
   const session = webSessionFor(cred);
   const prompt = webPrompt(Array.isArray(body.messages) ? body.messages : []);
@@ -1046,7 +1046,7 @@ const server = app.listen(config.port, config.host, () => {
   const keys = store.listApiKeys();
   const lines = [
     "",
-    "  robin-gateway  (OpenAI-compatible, Code Assist upstream)",
+    "  webg-gateway  (OpenAI-compatible, Code Assist upstream)",
     "  -------------------------------------------------------",
     `  listening        http://${config.host}:${config.port}`,
     `  admin console    http://${config.host}:${config.port}/admin/`,

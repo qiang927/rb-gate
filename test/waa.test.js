@@ -9,7 +9,7 @@ import { WaaSigner, WaaError } from "../src/waa.js";
 const fakeSigner = path.resolve("test/fixtures/fake-signer.mjs");
 
 function withFakeSigner() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "robin-waa-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "webg-gateway-waa-"));
   const previous = { ...config.waa };
   config.waa.enabled = true;
   config.waa.signerPath = fakeSigner;

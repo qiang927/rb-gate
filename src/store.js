@@ -13,10 +13,10 @@ const FILES = {
   settings: "settings.json",
 };
 const KV_KEYS = {
-  credentials: "robin/credentials",
-  "api-keys": "robin/api-keys",
-  admin: "robin/admin",
-  settings: "robin/settings",
+  credentials: "webg-gateway/credentials",
+  "api-keys": "webg-gateway/api-keys",
+  admin: "webg-gateway/admin",
+  settings: "webg-gateway/settings",
 };
 
 function readJson(file, fallback) {
@@ -35,12 +35,12 @@ function writeJsonAtomic(file, value) {
   fs.renameSync(tmp, file);
 }
 
-/** Credential channel: `robin` = Gemini web cookie, `aistudio` = AI Studio cookie. */
+/** Credential channel: `webg-gateway` = Gemini web cookie, `aistudio` = AI Studio cookie. */
 export function credentialGroup(cred) {
   if (!cred) return "";
   if (cred.type === "aistudio") return "pggo";
   if (cred.group) return cred.group;
-  return "robin";
+  return "webg-gateway";
 }
 
 function sanitizeCredential(cred, { reveal = false } = {}) {
@@ -83,7 +83,7 @@ class Store {
     // container restarts on hosts without a persistent disk (e.g. Render free tier).
     const encryptionKey = process.env.ENCRYPTION_KEY?.trim();
     if (encryptionKey) {
-      return crypto.createHmac("sha256", encryptionKey).update("robin/session/v1").digest("hex");
+      return crypto.createHmac("sha256", encryptionKey).update("webg-gateway/session/v1").digest("hex");
     }
     if (this._sessionSecret) return this._sessionSecret;
     try {
@@ -246,7 +246,7 @@ class Store {
     if (config.apiKeys.length) {
       throw new Error("API keys are managed by the GATEWAY_API_KEYS environment variable");
     }
-    const key = `sk-robin-${randomToken(24)}`;
+    const key = `sk-webg-gateway-${randomToken(24)}`;
     const entry = { id: randomId("key"), name: name || "new key", key, hash: sha256(key), createdAt: new Date().toISOString() };
     const keys = [...this.apiKeys().filter((item) => item.source !== "env"), entry];
     this.apiKeyCache = keys;
@@ -366,12 +366,12 @@ class Store {
       id: existing?.id || randomId("cred"),
       email: input.email || existing?.email || "",
       label: input.label || existing?.label || "",
-      type: input.type || existing?.type || "robin",
-      group: input.group || existing?.group || credentialGroup({ type: input.type || existing?.type || "robin" }),
+      type: input.type || existing?.type || "webg-gateway",
+      group: input.group || existing?.group || credentialGroup({ type: input.type || existing?.type || "webg-gateway" }),
       androidId: input.androidId || existing?.androidId || randomHex(16),
-      app: input.app || existing?.app || config.robinApp,
-      clientSig: input.clientSig || existing?.clientSig || config.robinClientSig,
-      scopes: input.scopes || existing?.scopes || config.robinScopes,
+      app: input.app || existing?.app || config.webgGatewayApp,
+      clientSig: input.clientSig || existing?.clientSig || config.webgGatewayClientSig,
+      scopes: input.scopes || existing?.scopes || config.webgGatewayScopes,
       projectId: input.projectId ?? existing?.projectId ?? "",
       tier: input.tier ?? existing?.tier ?? "",
       accessToken: input.accessToken ?? existing?.accessToken ?? "",
@@ -391,8 +391,8 @@ class Store {
       models: input.models ?? existing?.models ?? [],
       benefit: input.benefit ?? existing?.benefit ?? null,
     };
-    if (cred.type === "robin" && !cred.masterTokenEnc && !cred.webCookieEnc) {
-      throw new Error("robin credential requires a master token or an oauth_token to exchange");
+    if (cred.type === "webg-gateway" && !cred.masterTokenEnc && !cred.webCookieEnc) {
+      throw new Error("webg-gateway credential requires a master token or an oauth_token to exchange");
     }
     if (cred.type === "aistudio" && !cred.cookieEnc) {
       throw new Error("AI Studio credential requires a browser cookie");

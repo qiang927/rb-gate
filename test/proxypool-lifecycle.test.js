@@ -24,7 +24,7 @@ function freePort() {
   });
 }
 
-const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "robin-proxy-pool-"));
+const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "webg-gateway-proxy-pool-"));
 process.env.DATA_DIR = dataDir;
 process.env.MIHOMO_PATH = fileURLToPath(new URL("./fixtures/fake-mihomo.mjs", import.meta.url));
 process.env.PROXY_CONTROLLER_PORT = String(await freePort());

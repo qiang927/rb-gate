@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-process.env.DATA_DIR = "/tmp/robin-gateway-test-data";
+process.env.DATA_DIR = "/tmp/webg-gateway-test-data";
 
 const { classifyError } = await import("../src/router.js");
 

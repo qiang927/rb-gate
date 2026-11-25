@@ -39,13 +39,13 @@ export const config = {
 
   // gpsoauth client identity used to mint a bearer from a master token.
   // Defaults mirror the Chromecast identity used by notebooklm-py's master-token flow.
-  robinApp: process.env.ROBIN_APP || "com.google.android.gms",
-  robinClientSig: process.env.ROBIN_CLIENT_SIG || "38918a453d07199354f8b19af05ec6562ced5788",
+  webgGatewayApp: process.env.WEBG_GATEWAY_APP || "com.google.android.gms",
+  webgGatewayClientSig: process.env.WEBG_GATEWAY_CLIENT_SIG || "38918a453d07199354f8b19af05ec6562ced5788",
   // Identity used only for the Gemini web channel (OAuthLogin service mint).
   // The Chromecast app is the one verified to mint an OAuthLogin bearer.
   webApp: process.env.WEB_APP || "com.google.android.apps.chromecast.app",
   webSig: process.env.WEB_SIG || "24bb24c05e47e0aefa68a58a766179d9b613a600",
-  robinScopes: (process.env.ROBIN_SCOPES || [
+  webgGatewayScopes: (process.env.WEBG_GATEWAY_SCOPES || [
     "https://www.googleapis.com/auth/cloud-platform",
     "https://www.googleapis.com/auth/aicode",
     "https://www.googleapis.com/auth/cclog",

@@ -1,4 +1,4 @@
-# robin-gateway
+# webg-gateway
 
 把 **Gemini 网页版会话**包装成 **OpenAI 兼容 API** 的自托管网关。带管理面板、多账号轮换、Clash 代理池，可一键部署到 Render。
 
@@ -30,7 +30,7 @@
 你的浏览器
   │ 登录 gemini.google.com，复制 Cookie（含 SID / SAPISID …）
   ▼
-robin-gateway（Render / 本地）
+webg-gateway（Render / 本地）
   │ Cookie 用 AES-256-GCM 加密存盘 / Cloudflare KV
   │
   ├─ GoogleWebSession
@@ -74,7 +74,7 @@ OpenAI 兼容响应（流式 / 非流式）
 
 5. 构建完成后打开 Render 给的地址 → `地址/admin/` → 登录。
 6. 「凭证」→ 粘贴 `gemini.google.com` 的 Cookie → 验证并导入。
-7. 「API Keys」→ 新建 → 复制 `sk-robin-...`。
+7. 「API Keys」→ 新建 → 复制 `sk-webg-gateway-...`。
 8. 客户端 Base URL 填 `https://<你的地址>/v1`。
 
 ---
@@ -88,7 +88,7 @@ https://<service-name>.onrender.com
 ```
 
 - `<service-name>` = 你创建服务时填的 **Name**，默认取仓库名；
-- 如果名字被占用，Render 会**自动加随机后缀**（如 `rb-gate-9x2k.onrender.com`）；
+- 如果名字被占用，Render 会**自动加随机后缀**（如 `webg-gateway-9x2k.onrender.com`）；
 - **不存在** `https://<用户名>.onrender.com` 这种格式；
 - 唯一可靠的地址来源：<https://dashboard.render.com> → 你的服务 → 顶部 URL。
 
@@ -209,7 +209,7 @@ https://<service-name>.onrender.com
 
 ## API
 
-公开（`/health`、`/v1/models` 免鉴权；聊天需 `Authorization: Bearer sk-robin-...`）：
+公开（`/health`、`/v1/models` 免鉴权；聊天需 `Authorization: Bearer sk-webg-gateway-...`）：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -238,7 +238,7 @@ https://<service-name>.onrender.com
 ## 本地运行
 
 ```bash
-cd robin-gateway
+cd webg-gateway
 npm install
 ADMIN_PASSWORD=your-password npm start
 # http://localhost:8787/admin/
