@@ -1,17 +1,69 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  WEB_MODELS,
-  WEB_PRESETS,
   buildWebInner,
-  isWebModel,
-  lookupWebModel,
+  catalogFromRpc,
+  hydrateCatalog,
+  parseBatchexecute,
   parseCookieJar,
-  requiredTierForModel,
+  parseWebFrame,
+  resolveCatalogModel,
   resolveThinkingLevel,
+  serializeCatalog,
   splitWebModelId,
   thinkingFromBody,
+  webModelHeaders,
 } from "../src/googleweb.js";
+
+const HASH = {
+  auto: "8c46e95b1a07cecc",
+  hydrogen: "56fdd199312815e2",
+  neon: "e6fa609c3fa255c0",
+  carbon: "95a4c0abcba24364",
+};
+
+function rawModel(hash, display, base, number) {
+  const raw = new Array(20).fill(null);
+  raw[0] = hash;
+  raw[1] = display;
+  raw[2] = base;
+  raw[9] = number;
+  raw[10] = display;
+  raw[17] = number;
+  raw[19] = base;
+  return raw;
+}
+
+const LEVELS = [
+  [1, "Low", "Fast and efficient", false, "Gemini", "Hydrogen", "Hydrogen"],
+  [4, "Medium", "Balanced depth", false, "Gemini", "Hydrogen", "Hydrogen"],
+  [2, "High", "Extra thorough", false, "Gemini", "Hydrogen", "Hydrogen"],
+];
+
+function catalogBody() {
+  const body = new Array(25).fill(null);
+  body[15] = [
+    rawModel(HASH.auto, "Auto", "Auto", 6),
+    rawModel(HASH.hydrogen, "4 Hydrogen", "4 Hydrogen", 1),
+    rawModel(HASH.neon, "Neon", "4 Neon", 3),
+    rawModel(HASH.carbon, "Carbon", "4 Carbon", 8),
+  ];
+  body[16] = [8, 0, 38];
+  body[17] = [4, 5, 6, 8];
+  body[24] = [
+    "neon_pro_policy",
+    [
+      [["", 6, false, null, "Auto", "Adapts to your needs"], null],
+      [["", 1, false, null, "4 Hydrogen", "Everyday help"], LEVELS],
+      [["", 3, false, null, "Neon", "Deeper analysis"], LEVELS],
+    ],
+  ];
+  return body;
+}
+
+function buildCatalog() {
+  return catalogFromRpc(catalogBody());
+}
 
 test("parseCookieJar accepts a raw request-header string", () => {
   const jar = parseCookieJar("SID=abc; __Secure-1PSID=def; HSID=ghi");
@@ -28,39 +80,134 @@ test("parseCookieJar accepts newline separated pairs and ignores junk", () => {
   assert.deepEqual(jar, ["SID=abc", "APISID=def", "__Secure-3PSID=ghi"]);
 });
 
-test("buildWebInner leaves inner[80] empty when the client does not ask for a level", () => {
-  const inner = buildWebInner("hi", "web-gemini-4-neon");
-  assert.equal(inner[79], 2);
-  assert.equal(inner[80], null);
+test("catalogFromRpc trusts the picker, not the advertised model list", () => {
+  const catalog = buildCatalog();
+  assert.equal(catalog.tierLabel, "Pro");
+  assert.equal(catalog.capacity, 2);
+  assert.equal(catalog.capacityField, 12);
+  assert.deepEqual(
+    catalog.models.map((spec) => spec.id),
+    [
+      "web-gemini-4-auto",
+      "web-gemini-4-hydrogen-low",
+      "web-gemini-4-hydrogen-medium",
+      "web-gemini-4-hydrogen-high",
+      "web-gemini-4-neon-low",
+      "web-gemini-4-neon-medium",
+      "web-gemini-4-neon-high",
+    ],
+  );
+  assert.equal(catalog.byId.has("web-gemini-4-carbon"), false);
+});
+
+test("catalogFromRpc models the picker levels and served names", () => {
+  const catalog = buildCatalog();
+  const auto = catalog.byId.get("web-gemini-4-auto");
+  assert.equal(auto.isAuto, true);
+  assert.deepEqual(auto.levels, []);
+  assert.equal(auto.expectedServed, "Auto");
+  assert.equal(auto.modelNumber, 6);
+
+  const low = catalog.byId.get("web-gemini-4-hydrogen-low");
+  assert.equal(low.hash, HASH.hydrogen);
+  assert.equal(low.modelNumber, 1);
+  assert.equal(low.level.id, 1);
+  assert.deepEqual(low.levels.map((level) => level.id), [1, 4, 2]);
+  assert.deepEqual(low.levels.map((level) => level.name), ["low", "medium", "high"]);
+  assert.equal(low.expectedServed, "4 Hydrogen");
+  assert.equal(catalog.byId.get("web-gemini-4-hydrogen-medium").expectedServed, "4 Hydrogen Medium");
+  assert.equal(catalog.byId.get("web-gemini-4-hydrogen-high").expectedServed, "4 Hydrogen High");
+});
+
+test("resolveCatalogModel resolves exact ids, bare ids and thinking aliases", () => {
+  const catalog = buildCatalog();
+  assert.equal(resolveCatalogModel(catalog, "web-gemini-4-hydrogen-low").level.id, 1);
+  assert.equal(resolveCatalogModel(catalog, "web-gemini-4-hydrogen").level.id, 1);
+  assert.equal(resolveCatalogModel(catalog, "web-gemini-4-hydrogen", "high").level.id, 2);
+  assert.equal(resolveCatalogModel(catalog, "web-gemini-4-hydrogen", "max").level.id, 2);
+  assert.equal(resolveCatalogModel(catalog, "web-gemini-4-hydrogen", "4").level.id, 4);
+});
+
+test("resolveCatalogModel refuses Auto thinking and unavailable models", () => {
+  const catalog = buildCatalog();
+  assert.throws(
+    () => resolveCatalogModel(catalog, "web-gemini-4-auto", "low"),
+    (error) => error.code === "thinking_not_supported" && error.status === 400,
+  );
+  assert.throws(
+    () => resolveCatalogModel(catalog, "web-gemini-4-hydrogen", "banana"),
+    (error) => error.code === "thinking_not_available" && error.status === 400,
+  );
+  assert.throws(
+    () => resolveCatalogModel(catalog, "web-gemini-4-carbon"),
+    (error) => error.code === "model_not_available" && error.status === 404,
+  );
+});
+
+test("buildWebInner sends model number and picker level id", () => {
+  const catalog = buildCatalog();
+  const medium = resolveCatalogModel(catalog, "web-gemini-4-hydrogen", "medium");
+  const inner = buildWebInner("hi", medium);
+  assert.equal(inner[79], 1);
+  assert.equal(inner[80], 4);
   assert.deepEqual(inner[17], [[0]]);
   assert.deepEqual(inner[41], [2]);
-});
+  assert.equal(inner[45], null);
 
-test("buildWebInner maps low/medium/high onto inner[80] 1/2/3", () => {
-  for (const [level, wire] of [["low", 1], ["medium", 2], ["high", 3]]) {
-    const inner = buildWebInner("hi", "web-gemini-4-carbon", { thinking: level });
-    assert.equal(inner[80], wire);
-    assert.equal(inner[79], 3);
-    assert.deepEqual(inner[17], [[4]]);
-  }
-});
-
-test("buildWebInner ignores an unknown level and keeps the preset default", () => {
-  const inner = buildWebInner("hi", "web-gemini-4-hydrogen", { thinking: "deep" });
-  assert.equal(inner[80], null);
-  assert.deepEqual(inner[17], [[4]]);
-});
-
-test("buildWebInner falls back to Hydrogen for an unknown model id", () => {
-  const inner = buildWebInner("hi", "web-gemini-3.7-flash");
-  assert.equal(inner[79], 1);
-  assert.deepEqual(inner[17], [[4]]);
+  const auto = buildWebInner("hi", catalog.byId.get("web-gemini-4-auto"));
+  assert.equal(auto[79], 6);
+  assert.equal(auto[80], 0);
 });
 
 test("buildWebInner keeps the temporary-chat flags in sync", () => {
-  const inner = buildWebInner("hi", "web-gemini-4-auto", { temporary: true });
+  const catalog = buildCatalog();
+  const inner = buildWebInner("hi", catalog.byId.get("web-gemini-4-auto"), { temporary: true });
   assert.deepEqual(inner[41], [1]);
   assert.equal(inner[45], 1);
+});
+
+test("buildWebInner rejects a missing spec", () => {
+  assert.throws(
+    () => buildWebInner("hi", null),
+    (error) => error.code === "bad_model_spec" && error.status === 500,
+  );
+});
+
+test("webModelHeaders carries the real model hash, number and thinking", () => {
+  const catalog = buildCatalog();
+  const spec = resolveCatalogModel(catalog, "web-gemini-4-neon", "high");
+  const headers = webModelHeaders(spec, "uuid-1");
+  const header = JSON.parse(headers["x-goog-ext-525001261-jspb"]);
+  assert.equal(header[4], HASH.neon);
+  assert.equal(header[11], 2);
+  assert.equal(header[14], 3);
+  assert.equal(header[15], 2);
+  assert.equal(header[16], "uuid-1");
+  assert.equal(headers["x-goog-ext-73010989-jspb"], "[0]");
+  assert.equal(headers["x-goog-ext-73010990-jspb"], "[0,0,0]");
+  assert.deepEqual(JSON.parse(headers["x-goog-ext-525005358-jspb"]), ["uuid-1", 1]);
+
+  const ultra = webModelHeaders({ ...spec, capacity: 2, capacityField: 13 }, "uuid-2");
+  assert.deepEqual(JSON.parse(ultra["x-goog-ext-525001261-jspb"])[11], [null, 2]);
+});
+
+test("serializeCatalog and hydrateCatalog round-trip the picker", () => {
+  const catalog = buildCatalog();
+  const restored = hydrateCatalog(JSON.parse(JSON.stringify(serializeCatalog(catalog))));
+  assert.equal(restored.tierLabel, "Pro");
+  assert.equal(restored.byId.get("web-gemini-4-neon-high").level.id, 2);
+  assert.equal(restored.byBaseId.get("web-gemini-4-hydrogen").level.id, 1);
+  assert.equal(restored.models.length, 7);
+});
+
+test("parseBatchexecute finds the otAQ7b frame", () => {
+  const payload = catalogBody();
+  const raw = `)]}'\n\n${JSON.stringify([
+    ["wrb.fr", "otAQ7b", JSON.stringify(payload), null, null, null, "generic"],
+  ])}`;
+  const parsed = parseBatchexecute(raw, "otAQ7b");
+  assert.ok(parsed);
+  assert.equal(parsed[15].length, 4);
 });
 
 test("resolveThinkingLevel accepts the aliases clients send", () => {
@@ -89,46 +236,23 @@ test("thinkingFromBody reads reasoning_effort, reasoning.effort and a token budg
   assert.equal(thinkingFromBody({}), null);
 });
 
-test("the web catalogue advertises every preset at all three levels", () => {
-  const ids = Object.keys(WEB_MODELS);
-  assert.equal(ids.length, 15);
-  assert.equal(new Set(ids).size, 15);
-  for (const preset of Object.keys(WEB_PRESETS)) {
-    for (const level of ["low", "medium", "high"]) {
-      const id = `${preset}-${level}`;
-      assert.ok(WEB_MODELS[id], `${id} is listed`);
-      assert.equal(WEB_MODELS[id].preset, preset);
-      assert.equal(WEB_MODELS[id].level, level);
-      assert.equal(WEB_MODELS[id].mode, WEB_PRESETS[preset].mode);
-    }
-  }
+test("parseWebFrame reads served model and text from one frame", () => {
+  const inner = new Array(60).fill(null);
+  inner[4] = [[null, ["hello", " world"]]];
+  inner[39] = "95a4c0abcba24364";
+  inner[42] = "4 Hydrogen";
+  const line = JSON.stringify([["wrb.fr", null, JSON.stringify(inner), null, null, null, "generic"]]);
+  const frame = parseWebFrame(line);
+  assert.deepEqual(frame.texts, ["hello", " world"]);
+  assert.equal(frame.servedModel, "4 Hydrogen");
+  assert.equal(frame.echoModel, "95a4c0abcba24364");
 });
 
-test("a level-specific model id sets inner[80] without help from the request body", () => {
-  for (const [level, wire] of [["low", 1], ["medium", 2], ["high", 3]]) {
-    const inner = buildWebInner("hi", `web-gemini-4-neon-${level}`);
-    assert.equal(inner[79], 2);
-    assert.equal(inner[80], wire);
-  }
-});
-
-test("an explicit level still overrides the level baked into the model id", () => {
-  const inner = buildWebInner("hi", "web-gemini-4-neon-high", { thinking: "low" });
-  assert.equal(inner[80], 1);
-});
-
-test("bare preset ids stay callable as a Google-default alias", () => {
-  assert.ok(isWebModel("web-gemini-4-neon"));
-  assert.ok(isWebModel("web-gemini-4-neon-high"));
-  assert.equal(isWebModel("web-gemini-4-neon-banana"), false);
-  assert.equal(lookupWebModel("web-gemini-4-neon").level, null);
-  assert.equal(buildWebInner("hi", "web-gemini-4-neon")[80], null);
-});
-
-test("requiredTierForModel understands level suffixes and bare aliases", () => {
-  assert.equal(requiredTierForModel("web-gemini-4-carbon-high"), "Ultra");
-  assert.equal(requiredTierForModel("web-gemini-4-neon-low"), "Pro");
-  assert.equal(requiredTierForModel("web-gemini-4-hydrogen-medium"), "Free");
-  assert.equal(requiredTierForModel("web-gemini-4-neon"), "Pro");
-  assert.equal(requiredTierForModel("nope"), null);
+test("parseWebFrame keeps served model even when a frame has no text", () => {
+  const inner = new Array(60).fill(null);
+  inner[42] = "4 Neon";
+  const line = JSON.stringify([["wrb.fr", null, JSON.stringify(inner), null, null, null, "generic"]]);
+  const frame = parseWebFrame(line);
+  assert.deepEqual(frame.texts, []);
+  assert.equal(frame.servedModel, "4 Neon");
 });

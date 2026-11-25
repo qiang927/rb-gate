@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseUsageBody, requiredTierForModel, tierLabel } from "../src/googleweb.js";
+import { parseUsageBody, tierLabel } from "../src/googleweb.js";
 
 const BODY = `)]}'
 [{"data":{"viewer":{"rpcs":{"getUsageInfo":{"subscriptionTier":"TIER1","pools":[
@@ -45,11 +45,7 @@ test("parseUsageBody returns null for html, empty pools or bad json", () => {
   assert.equal(parseUsageBody(`[{"data":{"viewer":null}}]`), null);
 });
 
-test("tier helpers expose the official model requirements", () => {
+test("tierLabel names the account tiers", () => {
   assert.equal(tierLabel("TIER2"), "Ultra");
   assert.equal(tierLabel(""), "Free");
-  assert.equal(requiredTierForModel("web-gemini-4-carbon"), "Ultra");
-  assert.equal(requiredTierForModel("web-gemini-4-neon"), "Pro");
-  assert.equal(requiredTierForModel("web-gemini-4-hydrogen"), "Free");
-  assert.equal(requiredTierForModel("nope"), null);
 });

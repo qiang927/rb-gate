@@ -2,7 +2,7 @@
 
 把 **Gemini 网页版会话**包装成 **OpenAI 兼容 API** 的自托管网关。带管理面板、多账号轮换、Clash 代理池，可一键部署到 Render。
 
-- 15 个网页版模型：5 个档位 × 三档思维强度（low / medium / high），强度直接写在模型名里，如 `web-gemini-4-neon-high`
+- 网页版模型按账号真实目录生成：Auto / 4 Hydrogen / Neon（Ultra 账号额外有 4 Carbon），强度写在模型名里，如 `web-gemini-4-neon-high`
 - 用你自己的 Google 账号，**不需要** Gemini API Key
 - 一个二进制/一个容器，无数据库
 - 有手就行 → **[保姆级部署文档](docs/02-部署.md)**
@@ -38,11 +38,11 @@ webg-gateway（Render / 本地）
   │    POST …/BardFrontendService/StreamGenerate
   │         f.req = [[null, JSON(inner[102])]]
   │         inner[0]  = 提示词
-  │         inner[17] = 思考等级（think）
+  │         inner[17] = 固定 [[0]]（兼容字段；真实强度在 inner[80]）
   │         inner[41] = 历史模式（2 持久 / 1 临时）
-  │         inner[79] = mode → 决定模型档位
-  │         inner[80] = 思维强度 1=低 2=中 3=高（不传用默认）
-  │            1=Hydrogen  2=Neon  3=Carbon  4=Auto  6=Flash-Lite
+  │         inner[79] = 模型编号 model_number（来自账号目录，不是写死的档位）
+  │         inner[80] = 思维强度 id：1=low 4=medium 2=high；Auto 为 0
+  │         x-goog-ext-525001261-jspb = 模型 hash / capacity / model_number / thinking / uuid
   │         ← SSE 帧流 → 解析出增量文本
   │
   ├─ 代理池（可选）：mihomo 内核 + Clash 订阅节点
@@ -106,19 +106,20 @@ https://<service-name>.onrender.com
 
 ## 模型
 
-`GET /v1/models` 返回 15 个网页版模型：5 个上游档位 × 三档思维强度。强度直接写在模型名末尾，客户端在选模型时就确定了强度，不需要额外参数：
+`GET /v1/models` 不再返回固定的 15 个模型。网关用每个已导入账号的 `otAQ7b` 模型选择器（picker）生成列表；一个典型 Pro 号是 7 个：
 
-| 网页端档位 | low | medium | high | 最低账号档位 | 适合 |
-|---|---|---|---|---|---|
-| 4 Hydrogen | `web-gemini-4-hydrogen-low` | `web-gemini-4-hydrogen-medium` | `web-gemini-4-hydrogen-high` | Free | 日常问答，快 |
-| 4 Neon | `web-gemini-4-neon-low` | `web-gemini-4-neon-medium` | `web-gemini-4-neon-high` | Pro | 深度分析 |
-| 4 Carbon | `web-gemini-4-carbon-low` | `web-gemini-4-carbon-medium` | `web-gemini-4-carbon-high` | Ultra | 代码 / 复杂任务 |
-| 自动 | `web-gemini-4-auto-low` | `web-gemini-4-auto-medium` | `web-gemini-4-auto-high` | Free | 让 Google 选 |
-| Flash-Lite | `web-gemini-4-flash-lite-low` | `web-gemini-4-flash-lite-medium` | `web-gemini-4-flash-lite-high` | Free | 极快、简单任务 |
+| 网页端模型 | 模型 ID | 思维强度 | 适合 |
+|---|---|---|---|
+| Auto | `web-gemini-4-auto` | 无（单 ID，由 Google 路由） | 让 Google 选 |
+| 4 Hydrogen | `web-gemini-4-hydrogen-low` / `-medium` / `-high` | 三档 | 日常问答，快 |
+| Neon | `web-gemini-4-neon-low` / `-medium` / `-high` | 三档 | 深度分析 |
+| 4 Carbon | `web-gemini-4-carbon-low` / `-medium` / `-high` | 三档 | 代码 / 复杂任务（仅 Ultra 账号的 picker 会出现） |
 
-- `metadata.thinking_level` 是这个模型的强度（`low` / `medium` / `high`），`metadata.thinking_levels` 仍返回三档全集，兼容旧客户端。
-- 不带强度的旧 ID（如 `web-gemini-4-neon`）仍然可用，等价于「不指定强度、由 Google 用默认值」，但不在这 15 个里列出。
-- `metadata.required_tier` 是最低账号档位，方便客户端自己判断。
+- Auto 没有思维强度；对 Auto 传 `reasoning_effort` / `@think` 会返回 `400 thinking_not_supported`。
+- 不带强度的 bare ID（如 `web-gemini-4-neon`）等价于该模型的 `low`。
+- `metadata.thinking_level` 是这个模型的强度（`low` / `medium` / `high`）；Auto 为 `null`，`thinking_levels` 为 `[]`。`metadata.model_number` / `hash` / `capacity` / `served_name` 是请求上游时实际使用的字段。
+- `metadata.required_tier` 是当前账号的档位标签，不是模型的硬性门槛。
+- Pro 号请求 Carbon 会返回 `404 model_not_available`，不会再静默降级成 4 Hydrogen。
 
 ### 思维强度
 
@@ -136,10 +137,11 @@ https://<service-name>.onrender.com
 
 如果客户端能发请求字段，也兼容 `reasoning_effort` / `reasoning.effort` 和 Claude 风格的 `thinking.budget_tokens`，以及 `web-gemini-4-neon@think=high` 后缀。优先级：`@think` 后缀 > 请求字段 > 模型名里的强度。详见 [docs/03-使用.md](docs/03-使用.md#思维强度low--medium--high)。
 
-网页端没有公开的模型列表接口，所谓“动态读取”是**面板逐个档位发 ping**：
+模型目录的刷新方式：
 
-- 面板「模型」→ **动态探测**（约 10–20 秒）；
-- 结果写进 `/v1/models` 的 `metadata.available` / `latency_ms` / `checked_at`。
+- 面板「模型」→ **刷新目录**（读取账号的 `otAQ7b` picker，约 1–3 秒/账号）；
+- 导入网页 Cookie 时也会 best-effort 读取一次，并持久化到凭证里；
+- 内存缓存 10 分钟，`/v1/models` 会用缓存；Carbon 是否出现完全取决于账号权益。
 
 面板还会自动检测每个账号的**档位与额度**（5 小时窗口 / 7 天窗口，见「凭证 → 额度」）：
 
@@ -254,7 +256,7 @@ ADMIN_PASSWORD=your-password npm start
 
 ```
 src/server.js      Express：OpenAI 路由 + admin API + 静态面板
-src/googleweb.js   Gemini 网页版会话（at/bl、StreamGenerate、帧解析、动态探测）
+src/googleweb.js   Gemini 网页版会话（at/bl、StreamGenerate、帧解析、otAQ7b 模型目录）
 src/proxypool.js   mihomo 内核管理、Clash 订阅解析、测速/删除/自动切最快
 src/proxyroute.js  出站代理选择
 src/credentials.js Cookie 导入与测试

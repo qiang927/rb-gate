@@ -11,53 +11,225 @@ const DEFAULT_WEB_APP = "com.google.android.apps.chromecast.app";
 const DEFAULT_WEB_SIG = "24bb24c05e47e0aefa68a58a766179d9b613a600";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
 
-/** The five chat presets the Gemini web client exposes. */
-export const WEB_PRESETS = {
-  // Which backend model each preset maps to is decided by Google, so we
-  // address them by mode.
-  "web-gemini-4-hydrogen": { mode: 1, think: 4, label: "Gemini 4 Hydrogen (Web)" },
-  "web-gemini-4-neon": { mode: 2, think: 0, label: "Gemini 4 Neon (Web)" },
-  "web-gemini-4-carbon": { mode: 3, think: 4, label: "Gemini 4 Carbon (Web)" },
-  "web-gemini-4-auto": { mode: 4, think: 4, label: "Gemini 4 Auto (Web)" },
-  "web-gemini-4-flash-lite": { mode: 6, think: 4, label: "Gemini 4 Flash-Lite (Web)" },
-};
-
-/** The three thinking strengths the Gemini web client exposes per preset. */
+/** Thinking strength names exposed by the account picker. */
 export const THINKING_LEVELS = ["low", "medium", "high"];
-const LEVEL_LABELS = { low: "Low", medium: "Medium", high: "High" };
+
+/** Stable slug for a display name such as "4 Hydrogen". */
+function modelSlug(value) {
+  const slug = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "unknown";
+}
 
 /**
- * Every preset is advertised once per thinking level, so a client that can
- * only pick a model name (no reasoning_effort field) can still choose the
- * strength. IDs look like `web-gemini-4-neon-high`.
+ * Model ids are derived from the account's own picker, not from a static
+ * table: `web-gemini-4-hydrogen-low`. Auto has no thinking levels and is
+ * therefore a single id (`web-gemini-4-auto`).
  */
-export const WEB_MODELS = {};
-for (const [presetId, cfg] of Object.entries(WEB_PRESETS)) {
-  for (const level of THINKING_LEVELS) {
-    WEB_MODELS[`${presetId}-${level}`] = {
-      ...cfg,
-      preset: presetId,
-      level,
-      label: `${cfg.label} · ${LEVEL_LABELS[level]}`,
-    };
+export function webModelId(baseName) {
+  const slug = modelSlug(baseName);
+  return `web-gemini-${/^\d/.test(slug) ? slug : `4-${slug}`}`;
+}
+
+/** Account capacity used by the web client's model header. */
+export function computeCapacity(tierFlags = [], capabilityFlags = []) {
+  const tiers = new Set((Array.isArray(tierFlags) ? tierFlags : []).filter(Number.isInteger));
+  const caps = new Set((Array.isArray(capabilityFlags) ? capabilityFlags : []).filter(Number.isInteger));
+  if (tiers.has(21)) return { capacity: 1, capacityField: 13 };
+  if (tiers.has(22)) return { capacity: 2, capacityField: 13 };
+  if (caps.has(115)) return { capacity: 4, capacityField: 12 };
+  if (tiers.has(16) || caps.has(106)) return { capacity: 3, capacityField: 12 };
+  if (tiers.has(8) || tiers.has(19)) return { capacity: 2, capacityField: 12 };
+  return { capacity: 1, capacityField: 12 };
+}
+
+/**
+ * Turns the `otAQ7b` user-status response into the gateway's model catalog.
+ * The picker (`body[24]`) is the availability authority; the model list in
+ * `body[15]` is only a catalog and may contain models the account cannot use
+ * (Carbon on Pro, for example).
+ */
+export function catalogFromRpc(body) {
+  const source = Array.isArray(body) ? body : [];
+  const rawModels = Array.isArray(source[15]) ? source[15] : [];
+  const tierFlags = Array.isArray(source[16]) ? source[16] : [];
+  const capabilityFlags = Array.isArray(source[17]) ? source[17] : [];
+  const { capacity, capacityField } = computeCapacity(tierFlags, capabilityFlags);
+  const tierLabel = capacity >= 4 ? "Plus" : capacity >= 2 ? "Pro" : "Free";
+  const catalog = {
+    capacity,
+    capacityField,
+    tierLabel,
+    tierFlags,
+    capabilityFlags,
+    checkedAt: Date.now(),
+    models: [],
+    byId: new Map(),
+    byBaseId: new Map(),
+  };
+  const byNumber = new Map();
+  for (const raw of rawModels) {
+    if (!Array.isArray(raw)) continue;
+    const number = Number.isInteger(raw[17]) ? raw[17] : Number.isInteger(raw[9]) ? raw[9] : null;
+    if (number !== null) byNumber.set(number, raw);
   }
+
+  const addModel = (raw, levelsRaw) => {
+    const hash = String(raw[0] || "");
+    if (!hash) return;
+    const isAuto = /auto/i.test(String(raw[1] || "")) || /auto/i.test(String(raw[10] || ""));
+    const displayName = String(raw[1] || raw[10] || raw[2] || hash);
+    const baseName = isAuto ? "Auto" : String(raw[2] || raw[19] || raw[1] || hash).trim();
+    const modelNumber = Number.isInteger(raw[17]) ? raw[17] : Number.isInteger(raw[9]) ? raw[9] : 1;
+    const levels = (isAuto ? [] : Array.isArray(levelsRaw) ? levelsRaw : [])
+      .filter((item) => Array.isArray(item) && Number.isInteger(item[0]) && item[1])
+      .map((item) => ({
+        id: item[0],
+        label: String(item[1]),
+        name: String(item[1]).trim().toLowerCase(),
+        description: String(item[2] || ""),
+      }));
+    const baseId = webModelId(baseName);
+    const preset = baseId.replace(/^web-gemini-/, "");
+    const makeSpec = (level, isDefault) => {
+      const suffix = level ? `-${modelSlug(level.name)}` : "";
+      return {
+        id: `${baseId}${suffix}`,
+        baseId,
+        preset,
+        displayName,
+        baseName,
+        hash,
+        modelNumber,
+        capacity,
+        capacityField,
+        isAuto,
+        levels,
+        level,
+        isDefault: Boolean(isDefault),
+        expectedServed: level ? (isDefault ? baseName : `${baseName} ${level.label}`) : baseName,
+        label: level ? `${displayName} · ${level.label}` : displayName,
+      };
+    };
+    const specs = levels.length ? levels.map((level, index) => makeSpec(level, index === 0)) : [makeSpec(null, true)];
+    for (const spec of specs) {
+      if (catalog.byId.has(spec.id)) continue;
+      catalog.models.push(spec);
+      catalog.byId.set(spec.id, spec);
+      if (spec.isDefault) catalog.byBaseId.set(baseId, spec);
+    }
+  };
+
+  const picker = Array.isArray(source[24]) ? source[24] : null;
+  const groups = picker && Array.isArray(picker[1]) ? picker[1] : [];
+  const seen = new Set();
+  for (const group of groups) {
+    // Each picker group is [info, levels]; `info` is the model descriptor
+    // (`info[1]` is model_number) and `levels` is null for Auto.
+    const info = Array.isArray(group?.[0]) ? group[0] : null;
+    const number = info && Number.isInteger(info[1]) ? info[1] : null;
+    const raw = number === null ? null : byNumber.get(number);
+    if (!raw || seen.has(number)) continue;
+    seen.add(number);
+    addModel(raw, Array.isArray(group[1]) ? group[1] : []);
+  }
+  // Older/atypical accounts may not expose the picker; fall back to the
+  // advertised model list so the gateway still has something to offer.
+  if (!catalog.models.length && !groups.length) for (const raw of rawModels) addModel(raw, []);
+  return catalog;
 }
 
-/** Bare preset ids stay callable for older clients; they mean "Google default". */
-const WEB_MODEL_ALIASES = Object.fromEntries(
-  Object.entries(WEB_PRESETS).map(([presetId, cfg]) => [presetId, { ...cfg, preset: presetId, level: null }]),
-);
-
-export function lookupWebModel(id) {
-  return WEB_MODELS[id] || WEB_MODEL_ALIASES[id] || null;
+export function serializeCatalog(catalog) {
+  return {
+    capacity: catalog.capacity,
+    capacityField: catalog.capacityField,
+    tierLabel: catalog.tierLabel,
+    tierFlags: [...(catalog.tierFlags || [])],
+    capabilityFlags: [...(catalog.capabilityFlags || [])],
+    checkedAt: catalog.checkedAt || Date.now(),
+    models: (catalog.models || []).map((spec) => ({
+      ...spec,
+      levels: (spec.levels || []).map((level) => ({ ...level })),
+      level: spec.level ? { ...spec.level } : null,
+    })),
+  };
 }
 
-export function isWebModel(id) {
-  return Boolean(WEB_MODELS[id] || WEB_MODEL_ALIASES[id]);
+export function hydrateCatalog(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const catalog = {
+    capacity: Number(raw.capacity) || 1,
+    capacityField: Number(raw.capacityField) || 12,
+    tierLabel: raw.tierLabel || "Free",
+    tierFlags: Array.isArray(raw.tierFlags) ? raw.tierFlags : [],
+    capabilityFlags: Array.isArray(raw.capabilityFlags) ? raw.capabilityFlags : [],
+    checkedAt: Number(raw.checkedAt) || Date.now(),
+    models: Array.isArray(raw.models) ? raw.models : [],
+    byId: new Map(),
+    byBaseId: new Map(),
+  };
+  for (const spec of catalog.models) {
+    catalog.byId.set(spec.id, spec);
+    if (spec.isDefault) catalog.byBaseId.set(spec.baseId, spec);
+  }
+  return catalog;
 }
 
-// Wire values of inner[80]; 1/2/3 is what the web client sends for low/medium/high.
-const THINKING_WIRE = { low: 1, medium: 2, high: 3 };
+/** Resolve a requested id (exact, bare base, or base + thinking) to a spec. */
+export function resolveCatalogModel(catalog, id, thinking = null) {
+  const value = String(id || "");
+  const spec = catalog?.byId?.get(value) || catalog?.byBaseId?.get(value);
+  if (!spec) {
+    throw new WebError(`model ${value || "(missing)"} is not available for this account`, {
+      status: 404,
+      code: "model_not_available",
+    });
+  }
+  if (spec.isAuto) {
+    if (thinking) {
+      throw new WebError("Gemini 4 Auto does not expose thinking levels", {
+        status: 400,
+        code: "thinking_not_supported",
+      });
+    }
+    return spec;
+  }
+  const requested = String(thinking || "").trim().toLowerCase();
+  if (!requested) return spec;
+  const normalized = resolveThinkingLevel(requested) || requested;
+  const level = (spec.levels || []).find((item) => item.name === normalized || String(item.id) === requested);
+  if (!level) {
+    throw new WebError(`thinking level ${thinking} is not available for ${spec.baseId}`, {
+      status: 400,
+      code: "thinking_not_available",
+    });
+  }
+  const nextId = `${spec.baseId}-${modelSlug(level.name)}`;
+  const next = catalog.byId.get(nextId);
+  if (next) return next;
+  return {
+    ...spec,
+    id: nextId,
+    level,
+    isDefault: false,
+    expectedServed: level.name === "low" ? spec.baseName : `${spec.baseName} ${level.label}`,
+    label: `${spec.displayName} · ${level.label}`,
+  };
+}
+
+/**
+ * `web-gemini-4-neon@think=high` lets clients that can only set a model name
+ * pick a thinking level. Returns the plain model id plus the level (if any).
+ */
+export function splitWebModelId(id) {
+  const value = String(id || "");
+  const match = value.match(/^(.*?)@think=([a-z0-9_-]+)$/i);
+  if (!match) return { model: value, thinking: null };
+  return { model: match[1] || value, thinking: match[2].toLowerCase() };
+}
 
 /**
  * Accepts what OpenAI clients actually send for `reasoning_effort` and turns
@@ -70,18 +242,7 @@ export function resolveThinkingLevel(value) {
   const key = String(value).trim().toLowerCase();
   if (key === "minimal") return "low";
   if (key === "xhigh" || key === "max") return "high";
-  return Object.hasOwn(THINKING_WIRE, key) ? key : null;
-}
-
-/**
- * `web-gemini-4-neon@think=high` lets clients that can only set a model name
- * pick a thinking level. Returns the plain model id plus the level (if any).
- */
-export function splitWebModelId(id) {
-  const value = String(id || "");
-  const match = value.match(/^(.*?)@think=(low|medium|high)$/i);
-  if (!match) return { model: value, thinking: null };
-  return { model: match[1] || value, thinking: match[2].toLowerCase() };
+  return THINKING_LEVELS.includes(key) ? key : null;
 }
 
 /**
@@ -99,13 +260,14 @@ export function thinkingFromBody(body = {}) {
 }
 
 /**
- * Builds the inner request array. The thinking level rides in inner[80]
- * (1=low, 2=medium, 3=high); when the client did not ask for one the slot
- * stays null and Google applies the preset's own default.
+ * Builds the inner request array for a catalog spec. The real model rides in
+ * the x-goog-ext-525001261-jspb header; inner[79] is the model number and
+ * inner[80] is the picker's thinking level id (0 for Auto).
  */
-export function buildWebInner(prompt, model, { temporary = false, thinking = null } = {}) {
-  const cfg = lookupWebModel(model) || WEB_MODEL_ALIASES["web-gemini-4-hydrogen"];
-  const level = thinking ? THINKING_WIRE[thinking] : cfg.level ? THINKING_WIRE[cfg.level] : null;
+export function buildWebInner(prompt, spec, { temporary = false } = {}) {
+  if (!spec || typeof spec !== "object" || !spec.hash) {
+    throw new WebError("missing Gemini web model spec", { status: 500, code: "bad_model_spec" });
+  }
   const inner = new Array(102).fill(null);
   inner[0] = [prompt, 0, null, null, null, null, 0];
   inner[1] = ["zh-CN"];
@@ -114,7 +276,7 @@ export function buildWebInner(prompt, model, { temporary = false, thinking = nul
   inner[7] = 1;
   inner[10] = 1;
   inner[11] = 0;
-  inner[17] = [[cfg.think]];
+  inner[17] = [[0]];
   inner[18] = 0;
   inner[27] = 1;
   inner[30] = [4];
@@ -124,35 +286,126 @@ export function buildWebInner(prompt, model, { temporary = false, thinking = nul
   inner[59] = crypto.randomUUID();
   inner[61] = [];
   inner[68] = 1;
-  inner[79] = cfg.mode;
-  if (level) inner[80] = level;
+  inner[79] = spec.modelNumber;
+  inner[80] = spec.isAuto ? 0 : spec.level?.id ?? 0;
   return inner;
 }
 
-/**
- * Ask the web endpoint which presets actually answer right now. The web UI has
- * no model-list API, so the only honest check is a tiny prompt per preset.
- */
-export async function probeWebModels(session, { timeoutMs = 60000 } = {}) {
-  const results = [];
-  for (const [id, cfg] of Object.entries(WEB_PRESETS)) {
-    const started = Date.now();
-    let timer = null;
+/** Headers that actually select the model on the Gemini web backend. */
+export function webModelHeaders(spec, uuid) {
+  const capacityField = Number.isInteger(spec.capacityField) ? spec.capacityField : 12;
+  const capacity = Number.isInteger(spec.capacity) ? spec.capacity : 1;
+  const tail = capacityField === 13 ? [null, capacity] : capacity;
+  const thinking = spec.isAuto ? 0 : spec.level?.id ?? 0;
+  const header = [
+    1,
+    null,
+    null,
+    null,
+    spec.hash,
+    null,
+    null,
+    0,
+    [4, 5, 6, 8],
+    null,
+    null,
+    tail,
+    null,
+    null,
+    spec.modelNumber,
+    thinking,
+    uuid,
+  ];
+  return {
+    "x-goog-ext-525001261-jspb": JSON.stringify(header),
+    "x-goog-ext-73010989-jspb": "[0]",
+    "x-goog-ext-73010990-jspb": "[0,0,0]",
+    "x-goog-ext-525005358-jspb": JSON.stringify([uuid, 1]),
+  };
+}
+
+export function parseBatchexecute(raw, rpcid) {
+  const text = String(raw || "").replace(/^\)\]\}'\s*/, "").trim();
+  if (!text) return null;
+  const frames = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || /^\d+$/.test(trimmed)) continue;
     try {
-      const text = await Promise.race([
-        session.complete("ping", { model: id }),
-        new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new WebError("probe timed out", { status: 504, code: "probe_timeout" })), timeoutMs);
-        }),
-      ]);
-      results.push({ id, label: cfg.label, mode: cfg.mode, ok: true, ms: Date.now() - started, sample: String(text || "").trim().slice(0, 30) });
-    } catch (error) {
-      results.push({ id, label: cfg.label, mode: cfg.mode, ok: false, ms: Date.now() - started, error: error.message, code: error.code || "probe_failed" });
-    } finally {
-      if (timer) clearTimeout(timer);
+      const value = JSON.parse(trimmed);
+      if (Array.isArray(value)) frames.push(...value);
+    } catch {
+      // batchexecute can split a frame across lines; the fallback below still
+      // handles the common single-frame response.
     }
   }
-  return results;
+  if (!frames.length) {
+    try {
+      const value = JSON.parse(text);
+      if (Array.isArray(value)) frames.push(...value);
+    } catch {
+      return null;
+    }
+  }
+  for (const part of frames) {
+    if (!Array.isArray(part) || part[1] !== rpcid) continue;
+    if (Array.isArray(part[5]) && part[5][0] === 7) return null;
+    if (typeof part[2] === "string") {
+      try {
+        return JSON.parse(part[2]);
+      } catch {
+        return null;
+      }
+    }
+    if (part[2] && typeof part[2] === "object") return part[2];
+  }
+  return null;
+}
+
+/**
+ * Reads the account's real model list from the same `otAQ7b` RPC the Gemini
+ * web client uses. The picker only contains models the account can use.
+ */
+export async function fetchWebModelCatalog(session, { timeoutMs = 30000 } = {}) {
+  const { atToken: at, bl, cookie } = await session.bootstrap();
+  const reqid = Math.floor(Date.now() / 1000) % 1000000;
+  const url =
+    `https://gemini.google.com/_/BardChatUi/data/batchexecute` +
+    `?rpcids=otAQ7b&hl=en&_reqid=${reqid}&rt=c&source-path=%2Fapp&bl=${encodeURIComponent(bl)}`;
+  const freq = JSON.stringify([[["otAQ7b", "[]", null, "generic"]]]);
+  const body = new URLSearchParams({ at, "f.req": freq }).toString();
+  const res = await request(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded;charset=utf-8",
+      origin: "https://gemini.google.com",
+      referer: "https://gemini.google.com/app",
+      "x-same-domain": "1",
+      cookie,
+      "content-length": Buffer.byteLength(body),
+    },
+    body,
+    timeoutMs,
+  });
+  if (res.status === 302) {
+    session.cookies = null;
+    throw new WebError("gemini session expired (302)", { code: "session_expired", retryable: true });
+  }
+  if (res.status !== 200) {
+    throw new WebError(`model catalog request failed (${res.status})`, {
+      code: "catalog_failed",
+      retryable: true,
+    });
+  }
+  const parsed = parseBatchexecute(res.body, "otAQ7b");
+  if (!parsed) {
+    throw new WebError("model catalog response changed", { code: "catalog_parse_failed", retryable: true });
+  }
+  const catalog = catalogFromRpc(parsed);
+  if (!catalog.models.length) {
+    throw new WebError("model catalog is empty", { code: "catalog_empty", retryable: true });
+  }
+  return catalog;
 }
 
 export class WebError extends Error {
@@ -225,23 +478,29 @@ function openStream(url, { headers = {}, body = null, timeoutMs = 120000 } = {})
   });
 }
 
-function extractTexts(line) {
-  if (!line.includes('"wrb.fr"') || line.length < 200) return [];
+export function parseWebFrame(line) {
+  if (!line.includes('"wrb.fr"') || line.length < 200) return null;
   try {
     const arr = JSON.parse(line);
     const innerStr = arr?.[0]?.[2];
-    if (!innerStr || innerStr.length < 50) return [];
+    if (!innerStr || innerStr.length < 50) return null;
     const inner = JSON.parse(innerStr);
-    if (!Array.isArray(inner) || inner.length <= 4 || !inner[4]) return [];
+    if (!Array.isArray(inner) || inner.length <= 4) return null;
     const texts = [];
-    for (const part of inner[4]) {
+    for (const part of Array.isArray(inner[4]) ? inner[4] : []) {
       if (Array.isArray(part) && Array.isArray(part[1])) {
-        for (const t of part[1]) if (typeof t === "string" && t) texts.push(t);
+        for (const text of part[1]) if (typeof text === "string" && text) texts.push(text);
       }
     }
-    return texts;
+    const name = (value) =>
+      typeof value === "string" ? value : Array.isArray(value) && typeof value[0] === "string" ? value[0] : null;
+    return {
+      texts,
+      servedModel: name(inner[42]),
+      echoModel: name(inner[39]),
+    };
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -302,22 +561,6 @@ const USAGE_VARIABLES = JSON.stringify({
 });
 
 export const TIER_LABELS = { TIER0: "Plus", TIER1: "Pro", TIER2: "Ultra" };
-
-// What the official Gemini app unlocks at each tier (UI gating). The web
-// endpoint does not always enforce this server-side, so treat it as a hint and
-// rely on the live per-model probe for actual availability.
-export const MODEL_TIER_REQUIREMENTS = {
-  "web-gemini-4-hydrogen": "Free",
-  "web-gemini-4-neon": "Pro",
-  "web-gemini-4-carbon": "Ultra",
-  "web-gemini-4-auto": "Free",
-  "web-gemini-4-flash-lite": "Free",
-};
-
-export function requiredTierForModel(id) {
-  const preset = String(id || "").replace(/-(low|medium|high)$/i, "");
-  return MODEL_TIER_REQUIREMENTS[preset] || null;
-}
 
 export function tierLabel(raw) {
   if (!raw) return "Free";
@@ -516,24 +759,30 @@ export class GoogleWebSession {
     return this.tokens;
   }
 
-  #buildBody(prompt, model, { temporary = false, thinking = null } = {}) {
-    const inner = buildWebInner(prompt, model, { temporary, thinking });
-    const outer = [null, JSON.stringify(inner)];
-    return new URLSearchParams({ "f.req": JSON.stringify(outer) }).toString();
-  }
-
   /**
    * Stream text deltas from Gemini web. Yields plain text chunks.
+   *
+   * `spec` comes from the account catalog. The model is selected by the
+   * x-goog-ext-525001261-jspb header, not by the inner array. Gemini reports the
+   * model it actually used in inner[42]; an explicit model that was silently
+   * downgraded (Carbon on Pro, for example) fails before any text is yielded.
    */
-  async *chat(prompt, { model = "web-gemini-4-hydrogen", temporary = false, thinking = null } = {}) {
+  async *chat(prompt, { spec, temporary = false } = {}) {
+    if (!spec || typeof spec !== "object" || !spec.hash) {
+      throw new WebError("missing Gemini web model spec", { status: 500, code: "bad_model_spec" });
+    }
     const { atToken: at, bl, cookie } = await this.bootstrap();
-    const body = this.#buildBody(prompt, model, { temporary, thinking });
+    this.lastServedModel = null;
+    const inner = buildWebInner(prompt, spec, { temporary });
+    const uuid = inner[59];
+    const body = new URLSearchParams({ "f.req": JSON.stringify([null, JSON.stringify(inner)]) }).toString();
     const url =
       `https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate` +
       `?bl=${encodeURIComponent(bl)}&hl=en&_reqid=${Math.floor(Date.now() / 1000) % 1000000}&rt=c`;
     const payload = body + "&at=" + encodeURIComponent(at);
     const res = await openStream(url, {
       headers: {
+        ...webModelHeaders(spec, uuid),
         "content-type": "application/x-www-form-urlencoded",
         origin: "https://gemini.google.com",
         referer: "https://gemini.google.com/app",
@@ -556,8 +805,12 @@ export class GoogleWebSession {
     }
 
     const decoder = new StringDecoder("utf8");
+    const session = this;
+    const expected = spec.isAuto ? null : spec.expectedServed;
     let buffer = "";
     let last = "";
+    let pending = [];
+    let verified = spec.isAuto;
     const consume = function* (line) {
       if (!line.includes('"wrb.fr"')) return;
       if (line.includes("BardErrorInfo")) {
@@ -568,14 +821,30 @@ export class GoogleWebSession {
           retryable: true,
         });
       }
-      const texts = extractTexts(line);
-      if (!texts.length) return;
-      const text = texts[texts.length - 1];
-      if (text.length > last.length) {
-        const delta = text.slice(last.length);
-        last = text;
-        if (delta) yield delta;
+      const frame = parseWebFrame(line);
+      if (!frame) return;
+      if (frame.servedModel) {
+        session.lastServedModel = frame.servedModel;
+        if (!verified) {
+          if (expected && frame.servedModel !== expected) {
+            throw new WebError(`model downgraded: requested ${spec.id}, Gemini served ${frame.servedModel}`, {
+              status: 502,
+              code: "model_downgraded",
+            });
+          }
+          verified = true;
+          for (const delta of pending) yield delta;
+          pending = [];
+        }
       }
+      if (!frame.texts.length) return;
+      const text = frame.texts[frame.texts.length - 1];
+      if (text.length <= last.length) return;
+      const delta = text.slice(last.length);
+      last = text;
+      if (!delta) return;
+      if (verified) yield delta;
+      else pending.push(delta);
     };
 
     for await (const chunk of res) {
@@ -589,6 +858,12 @@ export class GoogleWebSession {
     }
     buffer += decoder.end();
     if (buffer.trim()) yield* consume(buffer);
+    if (!spec.isAuto && !verified) {
+      throw new WebError(`Gemini did not report which model served ${spec.id}`, {
+        status: 502,
+        code: "model_unverified",
+      });
+    }
   }
 
   async complete(prompt, options = {}) {

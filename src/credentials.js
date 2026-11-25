@@ -10,7 +10,8 @@ import {
   pickTier,
 } from "./google.js";
 import { store } from "./store.js";
-import { parseCookieJar, probeWebCookie } from "./googleweb.js";
+import { GoogleWebSession, fetchWebModelCatalog, parseCookieJar, probeWebCookie, serializeCatalog } from "./googleweb.js";
+import { logWarn } from "./logger.js";
 import { fetchAiStudioAccount, prepareCookies } from "./aistudio.js";
 
 const TOKEN_SKEW_MS = 5 * 60 * 1000;
@@ -133,6 +134,14 @@ export async function importWebCookie({ email = "", cookie, label = "" }) {
       { status: 400, code: "cookie_rejected" },
     );
   }
+  // Best-effort: persist the real picker catalog so the model list is available
+  // before the first chat request. A transient failure must not block import.
+  let catalog = null;
+  try {
+    catalog = await fetchWebModelCatalog(new GoogleWebSession({ cookie: raw }));
+  } catch (error) {
+    logWarn(`web catalog import skipped: ${error.message}`);
+  }
   const credential = store.upsertCredential({
     type: "webg-gateway",
     group: "webg-gateway",
@@ -141,6 +150,8 @@ export async function importWebCookie({ email = "", cookie, label = "" }) {
     webCookie: raw,
     status: "active",
     lastError: null,
+    webCatalog: catalog ? serializeCatalog(catalog) : null,
+    webCatalogAt: catalog ? new Date(catalog.checkedAt).toISOString() : null,
   });
   return { ok: true, credential, probe: { status: probe.status, cookies: probe.cookieCount } };
 }

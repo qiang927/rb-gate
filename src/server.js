@@ -3,23 +3,17 @@ import path from "node:path";
 import express from "express";
 import { config, ensureConfigWarnings } from "./config.js";
 import { importAistudio, importWebCookie, testCredential } from "./credentials.js";
-import { UpstreamError } from "./google.js";
-import { GoogleWebSession, THINKING_LEVELS, WEB_MODELS, fetchWebUsage, isWebModel, probeWebCookie, probeWebModels, requiredTierForModel, splitWebModelId, thinkingFromBody } from "./googleweb.js";
+import { GoogleWebSession, WebError, fetchWebModelCatalog, fetchWebUsage, hydrateCatalog, probeWebCookie, resolveCatalogModel, serializeCatalog, splitWebModelId, thinkingFromBody } from "./googleweb.js";
 import { decryptString } from "./crypto.js";
 import { isStudioModel, listStudioModels, lookupStudioModel, studioRequiredTier } from "./aistudio.js";
 import { completeStudioChat, streamStudioChat } from "./studio.js";
 import { explainWaaError, waaSigner } from "./waa.js";
-import { openStream, withCredential } from "./router.js";
 import { store } from "./store.js";
 import {
-  buildGeminiRequest,
   buildOpenaiChunk,
   buildOpenaiResponse,
   openaiSseHeaders,
-  readCandidate,
-  readUsage,
 } from "./translate.js";
-import { generateContent } from "./upstream.js";
 import { logError, logInfo, logWarn, recentLogs } from "./logger.js";
 import { initProxyPool, isAbuseBlock, proxyPool } from "./proxypool.js";
 
@@ -125,31 +119,193 @@ function requireAdmin(req, res, next) {
 }
 
 
+const WEB_CATALOG_TTL_MS = 10 * 60 * 1000;
+const webCatalogs = new Map();
 let webModelsCache = null;
 
-function webModelEntries() {
-  const probed = new Map(((webModelsCache && webModelsCache.models) || []).map((item) => [item.id, item]));
-  return Object.entries(WEB_MODELS).map(([id, cfg]) => {
-    const hit = probed.get(cfg.preset);
-    return {
-      id,
-      display_name: cfg.label,
-      object: "model",
-      created: 1735689600,
-      owned_by: "google-web",
-      groups: ["webg-gateway"],
-      metadata: {
-        mode: cfg.mode,
-        preset: cfg.preset,
-        required_tier: requiredTierForModel(id),
-        thinking_level: cfg.level,
-        thinking_levels: THINKING_LEVELS,
-        available: hit ? hit.ok : null,
-        latency_ms: hit ? hit.ms : null,
-        checked_at: webModelsCache ? webModelsCache.checkedAt : null,
-      },
-    };
-  });
+function webCredentialList({ includeDisabled = false } = {}) {
+  return store.credentials().filter(
+    (cred) =>
+      cred.type !== "aistudio" &&
+      (cred.webCookieEnc || cred.masterTokenEnc) &&
+      (includeDisabled || cred.status !== "disabled"),
+  );
+}
+
+function webCatalogKey(cred) {
+  return `${cred.id}:${cred.updatedAt || ""}`;
+}
+
+/** Load (and cache) the account's real picker-derived model catalog. */
+async function getWebCatalog(cred, { force = false } = {}) {
+  const key = webCatalogKey(cred);
+  const hit = webCatalogs.get(key);
+  if (!force && hit && Date.now() - hit.fetchedAt < WEB_CATALOG_TTL_MS) return hit.catalog;
+  if (!force && !hit && cred.webCatalog && cred.webCatalogAt) {
+    // After a restart the in-memory map is empty; trust a recently persisted
+    // catalog instead of paying a live round-trip on the first chat.
+    const age = Date.now() - Date.parse(cred.webCatalogAt);
+    const catalog = Number.isFinite(age) && age >= 0 && age < WEB_CATALOG_TTL_MS ? hydrateCatalog(cred.webCatalog) : null;
+    if (catalog) {
+      webCatalogs.set(key, { catalog, fetchedAt: Date.now() - age });
+      return catalog;
+    }
+  }
+  try {
+    const catalog = await fetchWebModelCatalog(webSessionFor(cred));
+    webCatalogs.set(key, { catalog, fetchedAt: Date.now() });
+    const fresh = store.rawCredential(cred.id);
+    if (fresh) {
+      store.saveCredential({
+        ...fresh,
+        webCatalog: serializeCatalog(catalog),
+        webCatalogAt: new Date(catalog.checkedAt).toISOString(),
+      });
+    }
+    return catalog;
+  } catch (error) {
+    if (hit) {
+      // Serve the previous catalog but don't hammer Google on every request.
+      hit.fetchedAt = Date.now() - WEB_CATALOG_TTL_MS + 60_000;
+      return hit.catalog;
+    }
+    if (cred.webCatalog) {
+      const stale = hydrateCatalog(cred.webCatalog);
+      if (stale) {
+        webCatalogs.set(key, { catalog: stale, fetchedAt: Date.now() - WEB_CATALOG_TTL_MS + 60_000 });
+        return stale;
+      }
+    }
+    throw error;
+  }
+}
+
+function catalogEntries(catalogs = []) {
+  const entries = new Map();
+  for (const catalog of catalogs) {
+    for (const spec of catalog.models || []) {
+      if (entries.has(spec.id)) continue;
+      entries.set(spec.id, {
+        id: spec.id,
+        display_name: spec.label,
+        object: "model",
+        created: 1735689600,
+        owned_by: "google-web",
+        groups: ["webg-gateway"],
+        metadata: {
+          preset: spec.preset,
+          base_model: spec.baseName,
+          hash: spec.hash,
+          model_number: spec.modelNumber,
+          capacity: catalog.capacity,
+          capacity_field: catalog.capacityField,
+          required_tier: catalog.tierLabel,
+          account_tier: catalog.tierLabel,
+          thinking_level: spec.level?.name || null,
+          thinking_levels: (spec.levels || []).map((level) => level.name),
+          served_name: spec.isAuto ? "自动路由" : spec.expectedServed,
+          available: true,
+          checked_at: catalog.checkedAt,
+        },
+      });
+    }
+  }
+  return [...entries.values()];
+}
+
+function updateWebModelsCache(entries, checkedAt) {
+  if (!entries.length) return;
+  webModelsCache = {
+    checkedAt,
+    models: entries.map((entry) => ({
+      id: entry.id,
+      label: entry.display_name,
+      ok: true,
+      ms: null,
+      sample: entry.metadata.served_name,
+    })),
+  };
+}
+
+function cachedWebCatalogs() {
+  const catalogs = [];
+  for (const cred of webCredentialList()) {
+    const hit = webCatalogs.get(webCatalogKey(cred));
+    const catalog = hit?.catalog || (cred.webCatalog ? hydrateCatalog(cred.webCatalog) : null);
+    if (catalog) catalogs.push(catalog);
+  }
+  return catalogs;
+}
+
+function cachedWebModelEntries() {
+  const catalogs = cachedWebCatalogs();
+  const entries = catalogEntries(catalogs);
+  if (entries.length) updateWebModelsCache(entries, Math.max(...catalogs.map((catalog) => catalog.checkedAt || 0)));
+  return entries;
+}
+
+/** Fetches every enabled web account's catalog and merges the visible models. */
+async function webModelEntries({ force = false } = {}) {
+  const catalogs = [];
+  const creds = webCredentialList();
+  const loaded = await Promise.all(
+    creds.map(async (cred) => {
+      try {
+        return await getWebCatalog(cred, { force });
+      } catch (error) {
+        logWarn(`web catalog: ${cred.email || cred.id}: ${error.message}`);
+        return null;
+      }
+    }),
+  );
+  for (const catalog of loaded) if (catalog) catalogs.push(catalog);
+  const entries = catalogEntries(catalogs);
+  if (entries.length) updateWebModelsCache(entries, Math.max(...catalogs.map((catalog) => catalog.checkedAt || 0)));
+  return entries;
+}
+
+/**
+ * Find a credential whose own catalog contains the requested model and
+ * thinking level. Accounts with Carbon (Ultra) can serve it; Pro accounts
+ * cannot, so a Carbon request falls through to 404 instead of a silent 4
+ * Hydrogen answer.
+ */
+async function resolveWebRequest(modelId, thinking = null) {
+  const creds = webCredentialList();
+  if (!creds.length) {
+    throw new WebError("no Gemini web credential; import a web cookie first", { status: 503, code: "no_web_credential" });
+  }
+  const byLastUsed = (a, b) => String(a.lastUsedAt || "").localeCompare(String(b.lastUsedAt || ""));
+  const withQuota = creds.filter((cred) => !usageExhausted(cred.usage)).sort(byLastUsed);
+  const exhausted = creds.filter((cred) => usageExhausted(cred.usage)).sort(byLastUsed);
+  const candidates = [...withQuota, ...exhausted];
+  let lastModelError = null;
+  let lastCatalogError = null;
+  let sawCatalog = false;
+  for (const cred of candidates) {
+    let catalog;
+    try {
+      catalog = await getWebCatalog(cred);
+    } catch (error) {
+      lastCatalogError = error;
+      continue;
+    }
+    sawCatalog = true;
+    try {
+      const spec = resolveCatalogModel(catalog, modelId, thinking);
+      return { cred, catalog, session: webSessionFor(cred), spec };
+    } catch (error) {
+      if (error.code === "model_not_available") {
+        lastModelError = error;
+        continue;
+      }
+      throw error;
+    }
+  }
+  if (!sawCatalog) {
+    throw lastCatalogError || new WebError("could not load the Gemini model catalog", { status: 502, code: "catalog_unavailable" });
+  }
+  throw lastModelError || new WebError(`model ${modelId} is not available for this account`, { status: 404, code: "model_not_available" });
 }
 
 function studioModelEntries() {
@@ -188,19 +344,23 @@ app.get("/health", (req, res) => {
       active: credentials.filter((cred) => cred.status === "active").length,
       error: credentials.filter((cred) => cred.status === "error").length,
     },
-    models: webModelEntries().length + studioModelEntries().length,
+    models: cachedWebModelEntries().length + studioModelEntries().length,
   });
 });
 
-app.get("/v1/models", (req, res) => {
+app.get("/v1/models", async (req, res) => {
+  const cached = cachedWebModelEntries();
+  const web = cached.length ? cached : await webModelEntries().catch(() => []);
   res.json({
     object: "list",
-    data: [...webModelEntries(), ...studioModelEntries()],
+    data: [...web, ...studioModelEntries()],
   });
 });
 
-app.get("/v1/models/:id", (req, res) => {
-  const model = [...webModelEntries(), ...studioModelEntries()].find((item) => item.id === req.params.id);
+app.get("/v1/models/:id", async (req, res) => {
+  const cached = cachedWebModelEntries();
+  const web = cached.length ? cached : await webModelEntries().catch(() => []);
+  const model = [...web, ...studioModelEntries()].find((item) => item.id === req.params.id);
   if (model) return res.json(model);
   return sendOpenaiError(res, 404, `model ${req.params.id} not found`, { code: "model_not_found" });
 });
@@ -213,116 +373,19 @@ app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
   const stream = Boolean(body.stream);
   if (isStudioModel(body.model)) return handleStudioChat(req, res, body, body.model, stream);
   const web = splitWebModelId(body.model);
-  if (!isWebModel(web.model)) {
-    return sendOpenaiError(res, 404, `model ${body.model || "(missing)"} is not available; web models look like web-gemini-4-neon-low, web-gemini-4-neon-medium or web-gemini-4-neon-high`, {
-      code: "model_not_found",
+  if (!String(web.model || "").startsWith("web-")) {
+    return sendOpenaiError(res, 404, `model ${body.model || "(missing)"} is not available`, { code: "model_not_found" });
+  }
+  let resolved;
+  try {
+    resolved = await resolveWebRequest(web.model, web.thinking || thinkingFromBody(body));
+  } catch (error) {
+    return sendOpenaiError(res, error.status || 502, error.message, {
+      type: "invalid_request_error",
+      code: error.code || "web_error",
     });
   }
-  return handleWebChat(req, res, body, web.model, stream, web.thinking || thinkingFromBody(body));
-
-  const controller = new AbortController();
-  res.on("close", () => controller.abort(new Error("client closed the connection")));
-
-  let prepared;
-  try {
-    prepared = buildGeminiRequest(body, { stream });
-  } catch (error) {
-    return sendOpenaiError(res, 400, `could not translate the request: ${error.message}`, { code: "bad_request" });
-  }
-  const { model, request } = prepared;
-
-  if (!stream) {
-    try {
-      const payload = await withCredential(({ cred, accessToken }) =>
-        generateContent({ credential: cred, accessToken, model, request, signal: controller.signal }),
-      );
-      const candidate = readCandidate(payload);
-      const response = buildOpenaiResponse({
-        text: candidate.text,
-        reasoning: candidate.thought,
-        toolCalls: candidate.toolCalls,
-        finishReason: candidate.finishReason,
-        usage: readUsage(payload),
-        model,
-      });
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      return res.json(response);
-    } catch (error) {
-      if (controller.signal.aborted) return res.end();
-      const status = error instanceof UpstreamError ? error.status || 502 : 500;
-      logError(`chat failed (${status}): ${error.message}`);
-      return sendOpenaiError(res, status, error.message, { type: "upstream_error", code: "upstream_failed" });
-    }
-  }
-
-  let opened;
-  try {
-    opened = await openStream({ model, request, signal: controller.signal });
-  } catch (error) {
-    if (controller.signal.aborted) return res.end();
-    const status = error instanceof UpstreamError ? error.status || 502 : 500;
-    logError(`chat failed (${status}): ${error.message}`);
-    return sendOpenaiError(res, status, error.message, { type: "upstream_error", code: "upstream_failed" });
-  }
-
-  const { generator, first } = opened;
-  const id = `chatcmpl-${crypto.randomBytes(12).toString("hex")}`;
-  const created = Math.floor(Date.now() / 1000);
-  res.writeHead(200, openaiSseHeaders());
-
-  const send = (chunk) => res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-  let usage = null;
-  let finishReason = "";
-  let wroteAny = false;
-  const seenToolCalls = new Set();
-
-  const emitPayload = (payload) => {
-    if (!payload) return;
-    if (payload.usageMetadata) usage = readUsage(payload);
-    const candidate = readCandidate(payload);
-    const delta = {};
-    if (!wroteAny) {
-      delta.role = "assistant";
-      wroteAny = true;
-    }
-    if (candidate.thought) delta.reasoning_content = candidate.thought;
-    if (candidate.text) delta.content = candidate.text;
-    const freshCalls = candidate.toolCalls.filter((call) => {
-      const key = `${call.function.name}:${call.function.arguments}`;
-      if (seenToolCalls.has(key)) return false;
-      seenToolCalls.add(key);
-      return true;
-    });
-    if (freshCalls.length) delta.tool_calls = freshCalls.map((call, index) => ({ index, ...call }));
-    if (candidate.finishReason) finishReason = candidate.finishReason;
-    if (delta.role || delta.content || delta.reasoning_content || delta.tool_calls) {
-      send(buildOpenaiChunk({ id, model, created, delta }));
-    }
-  };
-
-  try {
-    if (first && !first.done) emitPayload(first.value);
-    for await (const payload of generator) emitPayload(payload);
-    const finalFinish = seenToolCalls.size ? "tool_calls" : mapFinish(finishReason);
-    send(
-      buildOpenaiChunk({
-        id,
-        model,
-        created,
-        delta: {},
-        finishReason: finalFinish,
-        usage: usage || undefined,
-      }),
-    );
-    if (body.stream_options?.include_usage && usage) {
-      send(buildOpenaiChunk({ id, model, created, delta: {}, finishReason: null, usage }));
-    }
-    res.write("data: [DONE]\n\n");
-    res.end();
-  } catch (error) {
-    logError(`[stream] ${error.message}`);
-    sendOpenaiError(res, 502, error.message, { type: "upstream_error", code: "stream_failed" });
-  }
+  return handleWebChat(req, res, body, resolved, stream);
 });
 
 
@@ -338,22 +401,6 @@ function usageExhausted(usage) {
     if (!Number.isFinite(reset) || reset > now) return true;
   }
   return false;
-}
-
-function findWebCredential() {
-  const creds = store.credentials().filter(
-    (cred) => cred.type !== "aistudio" && (cred.webCookieEnc || cred.masterTokenEnc),
-  );
-  if (!creds.length) return null;
-  const pool = creds.filter((cred) => cred.status !== "disabled");
-  const usable = pool.length ? pool : creds;
-  // Prefer credentials that still have quota left; fall back to all when every
-  // one is exhausted (the upstream may still allow a little overage).
-  const withQuota = usable.filter((cred) => !usageExhausted(cred.usage));
-  const candidates = withQuota.length ? withQuota : usable;
-  // Least-recently used first, so multiple webg-gateway credentials rotate.
-  candidates.sort((a, b) => String(a.lastUsedAt || "").localeCompare(String(b.lastUsedAt || "")));
-  return candidates[0];
 }
 
 const usageRefreshing = new Set();
@@ -431,12 +478,8 @@ function webPrompt(messages) {
   return parts.join("\n\n");
 }
 
-async function handleWebChat(req, res, body, model, stream, thinking = null) {
-  const cred = findWebCredential();
-  if (!cred) {
-    return sendOpenaiError(res, 503, "no web credential: import a webg-gateway credential (oauth_token) first", { code: "no_web_credential" });
-  }
-  const session = webSessionFor(cred);
+async function handleWebChat(req, res, body, { cred, session, spec }, stream) {
+  const model = body.model || spec.id;
   const prompt = webPrompt(Array.isArray(body.messages) ? body.messages : []);
   const temporary = Boolean(body.temporary || body.web_temporary);
   const controller = new AbortController();
@@ -456,7 +499,7 @@ async function handleWebChat(req, res, body, model, stream, thinking = null) {
 
   if (!stream) {
     try {
-      const text = await withAbuseRetry(() => session.complete(prompt, { model, temporary, thinking }));
+      const text = await withAbuseRetry(() => session.complete(prompt, { spec, temporary }));
       store.markUsed(cred.id);
       store.markOk(cred.id);
       scheduleUsageRefresh(cred);
@@ -477,7 +520,7 @@ async function handleWebChat(req, res, body, model, stream, thinking = null) {
   let firstStep = null;
   try {
     firstStep = await withAbuseRetry(async () => {
-      const candidate = session.chat(prompt, { model, temporary, thinking })[Symbol.asyncIterator]();
+      const candidate = session.chat(prompt, { spec, temporary })[Symbol.asyncIterator]();
       const first = await candidate.next();
       iterator = candidate;
       return first;
@@ -687,20 +730,6 @@ function openaiUsage(usage) {
   };
 }
 
-function mapFinish(reason) {
-  switch (reason) {
-    case "MAX_TOKENS":
-      return "length";
-    case "SAFETY":
-    case "RECITATION":
-    case "BLOCKLIST":
-    case "PROHIBITED_CONTENT":
-      return "content_filter";
-    default:
-      return "stop";
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Admin API
 // ---------------------------------------------------------------------------
@@ -760,20 +789,18 @@ app.get("/admin/api/web/models", requireAdmin, (req, res) => {
 });
 
 app.post("/admin/api/web/models/probe", requireAdmin, async (req, res) => {
-  const cred = findWebCredential();
-  if (!cred) return res.status(400).json({ ok: false, error: "还没有导入 Gemini 网页版 Cookie" });
+  const creds = webCredentialList();
+  if (!creds.length) return res.status(400).json({ ok: false, error: "还没有导入 Gemini 网页版 Cookie" });
   try {
-    const session = webSessionFor(cred);
-    const models = await probeWebModels(session);
-    webModelsCache = { checkedAt: Date.now(), models };
-    const available = models.filter((item) => item.ok).length;
-    logInfo(`web models: ${available}/${models.length} presets answered`);
-    store.markUsed(cred.id);
-    store.markOk(cred.id);
-    res.json({ ok: true, ...webModelsCache });
+    const entries = await webModelEntries({ force: true });
+    if (!entries.length) throw new Error("账号没有返回可用的 Gemini 模型目录");
+    store.markUsed(creds[0].id);
+    store.markOk(creds[0].id);
+    logInfo(`web catalog: ${entries.length} models for ${creds.length} account(s)`);
+    res.json({ ok: true, ...(webModelsCache || { checkedAt: Date.now(), models: [] }) });
   } catch (error) {
-    store.markError(cred.id, error.message);
-    logWarn(`web models probe failed: ${error.message}`);
+    store.markError(creds[0].id, error.message);
+    logWarn(`web catalog probe failed: ${error.message}`);
     res.status(502).json({ ok: false, error: error.message });
   }
 });
@@ -911,7 +938,7 @@ app.post("/admin/api/proxy/stop", requireAdmin, async (req, res) => {
   res.json({ ok: true, proxy: proxyPool.status() });
 });
 
-app.get("/admin/api/overview", requireAdmin, (req, res) => {
+app.get("/admin/api/overview", requireAdmin, async (req, res) => {
   const credentials = store.listCredentials();
   const stats = {
     credentials: credentials.length,
@@ -929,7 +956,7 @@ app.get("/admin/api/overview", requireAdmin, (req, res) => {
     credentials,
     tiers,
     stats,
-    models: [...webModelEntries(), ...studioModelEntries()],
+    models: [...cachedWebModelEntries(), ...studioModelEntries()],
     apiKeys: store.listApiKeys(),
     admin: { source: store.adminSource() },
     webModels: webModelsCache || { checkedAt: null, models: [] },

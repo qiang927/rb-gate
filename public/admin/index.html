@@ -341,16 +341,16 @@
       <div class="models-grid">
       <div class="card">
         <strong>模型清单</strong>
-        <p class="hint">Gemini 网页版现在固定 15 个模型：5 个档位 × 三档思维强度（low / medium / high），每个强度都是独立的模型 ID，例如 <code>web-gemini-4-neon-low</code> / <code>-medium</code> / <code>-high</code>，客户端在选模型时就能挑强度，不需要额外参数。旧的不带强度的 <code>web-gemini-4-neon</code> 仍可用（等于不指定强度，由 Google 用默认值）。导入 pggo（AI Studio Cookie）后，这里还会出现该账号真实可用的 <code>pggo-*</code> 模型。</p>
+        <p class="hint">网页模型不再写死。网关用当前账号的 <code>otAQ7b</code> 模型选择器（picker）生成列表：Pro 号是 Auto / 4 Hydrogen / Neon；Carbon 只有在账号真有 Ultra 权益时才会出现。Auto 没有思维强度，只有单个 ID；其他模型按 low / medium / high 生成独立 ID，例如 <code>web-gemini-4-neon-low</code>。不带强度的 <code>web-gemini-4-neon</code> 仍可用（等于默认 low）。导入 pggo（AI Studio Cookie）后，这里还会出现该账号真实可用的 <code>pggo-*</code> 模型。</p>
         <div id="modelsTableWrap"><div class="empty">加载中…</div></div>
       </div>
       <div class="card">
         <div class="row" style="justify-content:space-between; margin-bottom:8px">
-          <strong>动态探测可用模型</strong>
-          <button id="probeModelsBtn">刷新</button>
+          <strong>账号模型目录</strong>
+          <button id="probeModelsBtn">刷新目录</button>
         </div>
-        <p class="hint">Gemini 网页端没有公开的模型列表接口，唯一可靠的办法是用已导入的 Cookie 给每个预设发一句 ping：能回就代表此刻可用。检测走代理池，逐个进行，耗时约 10–60 秒。</p>
-        <div id="webModelsWrap"><div class="empty">未检测</div></div>
+        <p class="hint">列表直接来自账号的 <code>otAQ7b</code> 响应，不再逐个发 ping。刷新会重新读取选择器；Carbon 不会出现在 Pro 号上，显式指定会被网关拒绝（404 <code>model_not_available</code>）。</p>
+        <div id="webModelsWrap"><div class="empty">未读取</div></div>
       </div>
       </div>
     </section>
@@ -734,7 +734,7 @@
     const wrap = $("webModelsWrap");
     const models = (state && state.models) || [];
     if (!models.length) {
-      wrap.innerHTML = '<div class="empty">未检测，点右上角「刷新」跑一次。</div>';
+      wrap.innerHTML = '<div class="empty">还没有读取账号目录，点右上角「刷新目录」。</div>';
       return;
     }
     const at = state.checkedAt ? new Date(state.checkedAt).toLocaleString() : "—";
@@ -743,9 +743,9 @@
       <td data-label="名称" class="small">${esc(item.label || "")}</td>
       <td data-label="状态" class="small">${item.ok ? '<span class="badge active">可用</span>' : '<span class="badge error">不可用</span>'}</td>
       <td data-label="耗时" class="small muted">${item.ms != null ? item.ms + " ms" : "—"}</td>
-      <td data-label="结果" class="small muted">${esc(item.ok ? item.sample || "" : item.error || "")}</td>
+      <td data-label="服务端模型" class="small muted">${esc(item.ok ? item.sample || "" : item.error || "")}</td>
     </tr>`).join("");
-    wrap.innerHTML = `<p class="hint">检测时间：${esc(at)}。每个上游档位发一句 ping，同一档位的三档强度共用同一个上游，可用性一致。</p><table class="cards"><thead><tr><th>上游档位</th><th>名称</th><th>状态</th><th>耗时</th><th>结果</th></tr></thead><tbody>${rows}</tbody></table>`;
+    wrap.innerHTML = `<p class="hint">读取时间：${esc(at)}。列表是账号 picker 里的真实模型；同一 base 的三档强度共用上游，但服务端返回的名称不同。</p><table class="cards"><thead><tr><th>模型</th><th>名称</th><th>状态</th><th>耗时</th><th>服务端模型</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
   async function loadWebModels() {
@@ -760,16 +760,16 @@
   async function probeModels() {
     const btn = $("probeModelsBtn");
     btn.disabled = true;
-    btn.textContent = "检测中…";
+    btn.textContent = "刷新中…";
     try {
       const data = await api("/admin/api/web/models/probe", { method: "POST" });
       renderWebModels(data);
-      toast(`检测完成：${(data.models || []).filter((item) => item.ok).length}/${(data.models || []).length} 可用`);
+      toast(`目录已刷新：${(data.models || []).length} 个模型`);
     } catch (error) {
       toast(error.message, true);
     } finally {
       btn.disabled = false;
-      btn.textContent = "刷新";
+      btn.textContent = "刷新目录";
     }
   }
 
@@ -784,18 +784,20 @@
       const state = meta.available === true
         ? '<span class="badge active">可用</span>'
         : meta.available === false ? '<span class="badge error">不可用</span>' : '<span class="badge">未检测</span>';
+      const level = meta.thinking_level ? ({ low: "低", medium: "中", high: "高" }[meta.thinking_level] || meta.thinking_level) : "—";
+      const served = meta.served_name || "—";
       return `<tr>
         <td data-label="模型" class="mono">${esc(model.id)}</td>
         <td data-label="名称" class="small">${esc(model.display_name || "")}</td>
         <td data-label="通道" class="small muted">${esc((model.groups || []).includes("pggo") || (model.groups || []).includes("aistudio") ? "pggo" : "web")}</td>
-        <td data-label="官方档位" class="small muted">${esc(meta.required_tier || "—")}</td>
+        <td data-label="账号档位" class="small muted">${esc(meta.required_tier || "—")}</td>
         <td data-label="状态" class="small">${state}</td>
-        <td data-label="模式" class="small muted">${esc(String(meta.mode ?? "—"))}</td>
-        <td data-label="思维强度" class="small muted">${esc(meta.thinking_level ? ({ low: "低", medium: "中", high: "高" }[meta.thinking_level] || meta.thinking_level) : "—")}</td>
-        <td data-label="延迟" class="small muted">${meta.latency_ms != null ? meta.latency_ms + " ms" : "—"}</td>
+        <td data-label="模型编号" class="small muted">${esc(String(meta.model_number ?? "—"))}</td>
+        <td data-label="思维强度" class="small muted">${esc(level)}</td>
+        <td data-label="服务端模型" class="small muted">${esc(served)}</td>
       </tr>`;
     }).join("");
-    wrap.innerHTML = `<table class="cards"><thead><tr><th>模型</th><th>名称</th><th>通道</th><th>官方档位</th><th>状态</th><th>模式</th><th>思维强度</th><th>延迟</th></tr></thead><tbody>${rows}</tbody></table>`;
+    wrap.innerHTML = `<table class="cards"><thead><tr><th>模型</th><th>名称</th><th>通道</th><th>账号档位</th><th>状态</th><th>模型编号</th><th>思维强度</th><th>服务端模型</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
   async function changePassword() {

@@ -390,6 +390,8 @@ class Store {
       cookieEnc: input.cookie ? encryptString(input.cookie, config.dataDir) : existing?.cookieEnc || "",
       models: input.models ?? existing?.models ?? [],
       benefit: input.benefit ?? existing?.benefit ?? null,
+      webCatalog: input.webCatalog ?? existing?.webCatalog ?? null,
+      webCatalogAt: input.webCatalogAt ?? existing?.webCatalogAt ?? null,
     };
     if (cred.type === "webg-gateway" && !cred.masterTokenEnc && !cred.webCookieEnc) {
       throw new Error("webg-gateway credential requires a master token or an oauth_token to exchange");
