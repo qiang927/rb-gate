@@ -150,7 +150,12 @@ export async function completeStudioChat(options) {
   let thoughts = "";
   let usage = null;
   let finishReason = null;
+  let started = false;
   for await (const frame of streamStudioChat(options)) {
+    if (!started) {
+      started = true;
+      options.onStart?.();
+    }
     if (frame.text) text += frame.text;
     if (frame.thoughts) thoughts += frame.thoughts;
     if (frame.usage) usage = frame.usage;

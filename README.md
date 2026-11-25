@@ -232,7 +232,7 @@ https://<service-name>.onrender.com
 | POST | `/admin/api/credentials/:id/test`，PATCH/DELETE `:id` | 测试 / 启停 / 删除 |
 | GET | `/admin/api/web/models`，POST `web/models/probe` | 动态模型探测 |
 | GET/POST | `/admin/api/proxy`，`proxy/import` `proxy/start` `proxy/select` `proxy/rotate` `proxy/test-all` `proxy/remove` `proxy/remove-all` `proxy/stop` | 代理池；`stop` 仅暂停使用并保留默认分组 |
-| GET | `/admin/api/logs` | 最近日志 |
+| GET | `/admin/api/logs` | 最近 30 条日志（每次 AI 请求 3 条） |
 | POST | `/admin/api/password` | 改密码（`ADMIN_PASSWORD` 已设置时拒绝） |
 
 ---
@@ -279,6 +279,7 @@ docs/              保姆级文档
 | [docs/02-部署.md](docs/02-部署.md) | Fork → KV → Render → 首次登录 → 验证（含网址说明） |
 | [docs/03-使用.md](docs/03-使用.md) | 取 Cookie、模型、API Key、客户端、代理池 |
 | [docs/04-常见问题.md](docs/04-常见问题.md) | 22 个常见报错与处置 |
+| [docs/05-错误码.md](docs/05-错误码.md) | HTTP 状态码 / 错误 code / 原因与处理 |
 
 ---
 

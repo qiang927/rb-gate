@@ -14,7 +14,7 @@ import {
   buildOpenaiResponse,
   openaiSseHeaders,
 } from "./translate.js";
-import { logError, logInfo, logWarn, recentLogs } from "./logger.js";
+import { logAi, logError, logInfo, logWarn, recentLogs } from "./logger.js";
 import { initProxyPool, isAbuseBlock, proxyPool } from "./proxypool.js";
 
 const app = express();
@@ -25,6 +25,7 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Api-Key, X-Admin-Password");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Expose-Headers", "X-Request-Id");
   if (req.method === "OPTIONS") return res.status(204).end();
   next();
 });
@@ -365,25 +366,36 @@ app.get("/v1/models/:id", async (req, res) => {
   return sendOpenaiError(res, 404, `model ${req.params.id} not found`, { code: "model_not_found" });
 });
 
+function rejectChatRequest(req, res, status, message, code) {
+  logAi("rejected", {
+    id: req.requestId,
+    model: req.body?.model,
+    status,
+    code,
+    error: message,
+    phase: "validate",
+  });
+  return sendOpenaiError(res, status, message, { code });
+}
+
 app.post("/v1/chat/completions", requireApiKey, async (req, res) => {
+  req.requestId = `req_${crypto.randomBytes(6).toString("hex")}`;
+  res.setHeader("X-Request-Id", req.requestId);
   const body = req.body || {};
   if (!Array.isArray(body.messages) || body.messages.length === 0) {
-    return sendOpenaiError(res, 400, "messages must be a non-empty array", { code: "invalid_messages" });
+    return rejectChatRequest(req, res, 400, "messages must be a non-empty array", "invalid_messages");
   }
   const stream = Boolean(body.stream);
   if (isStudioModel(body.model)) return handleStudioChat(req, res, body, body.model, stream);
   const web = splitWebModelId(body.model);
   if (!String(web.model || "").startsWith("web-")) {
-    return sendOpenaiError(res, 404, `model ${body.model || "(missing)"} is not available`, { code: "model_not_found" });
+    return rejectChatRequest(req, res, 404, `model ${body.model || "(missing)"} is not available`, "model_not_found");
   }
   let resolved;
   try {
     resolved = await resolveWebRequest(web.model, web.thinking || thinkingFromBody(body));
   } catch (error) {
-    return sendOpenaiError(res, error.status || 502, error.message, {
-      type: "invalid_request_error",
-      code: error.code || "web_error",
-    });
+    return rejectChatRequest(req, res, error.status || 502, error.message, error.code || "web_error");
   }
   return handleWebChat(req, res, body, resolved, stream);
 });
@@ -484,6 +496,30 @@ async function handleWebChat(req, res, body, { cred, session, spec }, stream) {
   const temporary = Boolean(body.temporary || body.web_temporary);
   const controller = new AbortController();
   res.on("close", () => controller.abort(new Error("client closed the connection")));
+  const requestId = req.requestId || "-";
+  const startedAt = Date.now();
+  let firstAt = null;
+  let chars = 0;
+
+  const markStart = () => {
+    if (firstAt !== null) return;
+    firstAt = Date.now();
+    logAi("response", { id: requestId, model, stream, ms: firstAt - startedAt });
+  };
+  const logFinish = (status, code, message) => {
+    const fields = {
+      id: requestId,
+      model,
+      stream,
+      phase: firstAt === null ? "request" : "response",
+      ms: Date.now() - startedAt,
+      status,
+      chars,
+    };
+    if (code) fields.code = code;
+    if (message) fields.error = message;
+    logAi(code ? "failed" : "done", fields);
+  };
 
   const withAbuseRetry = async (fn) => {
     try {
@@ -497,19 +533,31 @@ async function handleWebChat(req, res, body, { cred, session, spec }, stream) {
     }
   };
 
+  logAi("request", {
+    id: requestId,
+    model,
+    stream,
+    messages: Array.isArray(body.messages) ? body.messages.length : 0,
+  });
+
   if (!stream) {
     try {
-      const text = await withAbuseRetry(() => session.complete(prompt, { spec, temporary }));
+      const text = await withAbuseRetry(() => session.complete(prompt, { spec, temporary, onStart: markStart }));
+      chars = text.length;
       store.markUsed(cred.id);
       store.markOk(cred.id);
       scheduleUsageRefresh(cred);
+      logFinish(200);
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       return res.json(buildOpenaiResponse({ text, model, toolCalls: [] }));
     } catch (error) {
-      if (controller.signal.aborted) return res.end();
+      if (controller.signal.aborted) {
+        logAi("aborted", { id: requestId, model, stream, phase: firstAt === null ? "request" : "response", ms: Date.now() - startedAt, chars });
+        return res.end();
+      }
       const status = error.status || 502;
       store.markError(cred.id, error.message, { cooldownMs: status === 429 ? 60_000 : 0 });
-      logError(`web chat failed (${status}): ${error.message}`);
+      logFinish(status, error.code || "web_failed", error.message);
       return sendOpenaiError(res, status, error.message, { type: "web_error", code: error.code || "web_failed" });
     }
   }
@@ -520,14 +568,17 @@ async function handleWebChat(req, res, body, { cred, session, spec }, stream) {
   let firstStep = null;
   try {
     firstStep = await withAbuseRetry(async () => {
-      const candidate = session.chat(prompt, { spec, temporary })[Symbol.asyncIterator]();
+      const candidate = session.chat(prompt, { spec, temporary, onStart: markStart })[Symbol.asyncIterator]();
       const first = await candidate.next();
       iterator = candidate;
       return first;
     });
   } catch (error) {
-    if (controller.signal.aborted) return res.end();
-    logError(`web chat failed (${error.status || 502}): ${error.message}`);
+    if (controller.signal.aborted) {
+      logAi("aborted", { id: requestId, model, stream, phase: firstAt === null ? "request" : "response", ms: Date.now() - startedAt, chars });
+      return res.end();
+    }
+    logFinish(error.status || 502, error.code || "web_failed", error.message);
     return sendOpenaiError(res, error.status || 502, error.message, { type: "web_error", code: error.code || "web_failed" });
   }
 
@@ -541,16 +592,19 @@ async function handleWebChat(req, res, body, { cred, session, spec }, stream) {
     while (step && !step.done) {
       if (controller.signal.aborted) break;
       const delta = step.value;
+      markStart();
       if (!wroteRole) {
         send(buildOpenaiChunk({ id, model, created, delta: { role: "assistant" } }));
         wroteRole = true;
       }
+      chars += String(delta || "").length;
       send(buildOpenaiChunk({ id, model, created, delta: { content: delta } }));
       step = await iterator.next();
     }
     store.markUsed(cred.id);
     store.markOk(cred.id);
     scheduleUsageRefresh(cred);
+    logFinish(200);
     send(buildOpenaiChunk({ id, model, created, delta: {}, finishReason: "stop" }));
     if (body.stream_options?.include_usage) {
       send(buildOpenaiChunk({ id, model, created, delta: {}, finishReason: null, usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } }));
@@ -558,12 +612,18 @@ async function handleWebChat(req, res, body, { cred, session, spec }, stream) {
     res.write("data: [DONE]\n\n");
     res.end();
   } catch (error) {
-    if (!controller.signal.aborted) store.markError(cred.id, error.message, { cooldownMs: error.status === 429 ? 60_000 : 0 });
-    logError(`[web stream] ${error.message}`);
-    if (!res.headersSent) {
-      return sendOpenaiError(res, error.status || 502, error.message, { type: "web_error", code: error.code || "web_failed" });
+    if (controller.signal.aborted) {
+      logAi("aborted", { id: requestId, model, stream, phase: firstAt === null ? "request" : "response", ms: Date.now() - startedAt, chars });
+      return res.end();
     }
-    res.write(`data: ${JSON.stringify({ error: { message: error.message, type: "web_error" } })}\n\n`);
+    const status = error.status || 502;
+    const code = error.code || "web_failed";
+    store.markError(cred.id, error.message, { cooldownMs: status === 429 ? 60_000 : 0 });
+    logFinish(status, code, error.message);
+    if (!res.headersSent) {
+      return sendOpenaiError(res, status, error.message, { type: "web_error", code });
+    }
+    res.write(`data: ${JSON.stringify({ error: { message: error.message, type: "web_error", code, status } })}\n\n`);
     res.write("data: [DONE]\n\n");
     res.end();
   }
@@ -580,52 +640,82 @@ function findStudioCredential() {
 
 async function handleStudioChat(req, res, body, modelId, stream) {
   const model = lookupStudioModel(modelId);
-  if (!model) return sendOpenaiError(res, 404, `model ${modelId} not found`, { code: "model_not_found" });
+  if (!model) return rejectChatRequest(req, res, 404, `model ${modelId} not found`, "model_not_found");
   const credential = findStudioCredential();
   if (!credential) {
-    return sendOpenaiError(res, 503, "no pggo credential: import an aistudio.google.com cookie first", {
-      code: "no_pggo_credential",
-    });
+    return rejectChatRequest(req, res, 503, "no pggo credential: import an aistudio.google.com cookie first", "no_pggo_credential");
   }
   let cookie;
   try {
     cookie = decryptString(credential.cookieEnc, config.dataDir);
   } catch (error) {
-    return sendOpenaiError(res, 500, `could not decrypt the AI Studio cookie: ${error.message}`, {
-      code: "pggo_cookie_decrypt_failed",
-    });
+    return rejectChatRequest(req, res, 500, `could not decrypt the AI Studio cookie: ${error.message}`, "pggo_cookie_decrypt_failed");
   }
   const signer = waaSigner.status();
   if (!signer.enabled) {
-    return sendOpenaiError(res, 503, "the WAA signer is disabled (WAA_DISABLED=1)", { code: "waa_disabled" });
+    return rejectChatRequest(req, res, 503, "the WAA signer is disabled (WAA_DISABLED=1)", "waa_disabled");
   }
   if (!signer.binaryExists) {
-    return sendOpenaiError(res, 503, "the WAA signer binary is missing; rebuild the container image", {
-      code: "waa_missing_binary",
-    });
+    return rejectChatRequest(req, res, 503, "the WAA signer binary is missing; rebuild the container image", "waa_missing_binary");
   }
 
   const controller = new AbortController();
   res.on("close", () => controller.abort(new Error("client closed the connection")));
+  const requestId = req.requestId || "-";
+  const startedAt = Date.now();
+  let firstAt = null;
+  let chars = 0;
+  const markStart = () => {
+    if (firstAt !== null) return;
+    firstAt = Date.now();
+    logAi("response", { id: requestId, model: modelId, stream, ms: firstAt - startedAt });
+  };
+  const logFinish = (status, code, message) => {
+    const fields = {
+      id: requestId,
+      model: modelId,
+      stream,
+      phase: firstAt === null ? "request" : "response",
+      ms: Date.now() - startedAt,
+      status,
+      chars,
+    };
+    if (code) fields.code = code;
+    if (message) fields.error = message;
+    logAi(code ? "failed" : "done", fields);
+  };
   const options = { cookie, model, body, signal: controller.signal, tier: credential.tier || undefined };
+
+  logAi("request", {
+    id: requestId,
+    model: modelId,
+    stream,
+    messages: Array.isArray(body.messages) ? body.messages.length : 0,
+  });
 
   if (!stream) {
     try {
-      const result = await completeStudioChat(options);
+      const result = await completeStudioChat({ ...options, onStart: markStart });
       const text = String(result.text || "").trim();
       if (!text) throw new Error("AI Studio returned an empty response");
+      chars = text.length;
       store.markUsed(credential.id);
       store.markOk(credential.id);
+      logFinish(200);
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       return res.json(buildOpenaiResponse({ text, model: modelId, toolCalls: [], usage: openaiUsage(result.usage) }));
     } catch (error) {
-      if (controller.signal.aborted) return res.end();
+      if (controller.signal.aborted) {
+        logAi("aborted", { id: requestId, model: modelId, stream, phase: firstAt === null ? "request" : "response", ms: Date.now() - startedAt, chars });
+        return res.end();
+      }
       const status = error.status || 502;
+      const code = error.code || "pggo_failed";
       store.markError(credential.id, error.message, { cooldownMs: status === 429 ? 60_000 : 0 });
-      logError(`pggo chat failed (${status}): ${error.message}`);
+      logFinish(status, code, error.message);
       return sendOpenaiError(res, status, explainWaaError(error), {
         type: "pggo_error",
-        code: error.code || "pggo_failed",
+        code,
       });
     }
   }
@@ -647,12 +737,14 @@ async function handleStudioChat(req, res, body, modelId, stream) {
       }),
     ]);
   } catch (error) {
-    if (controller.signal.aborted) return res.end();
-    logError(`pggo chat failed (${error.status || 502}): ${error.message}`);
-    return sendOpenaiError(res, error.status || 502, explainWaaError(error), {
-      type: "pggo_error",
-      code: error.code || "pggo_failed",
-    });
+    if (controller.signal.aborted) {
+      logAi("aborted", { id: requestId, model: modelId, stream, phase: firstAt === null ? "request" : "response", ms: Date.now() - startedAt, chars });
+      return res.end();
+    }
+    const status = error.status || 502;
+    const code = error.code || "pggo_failed";
+    logFinish(status, code, error.message);
+    return sendOpenaiError(res, status, explainWaaError(error), { type: "pggo_error", code });
   }
 
   const id = `chatcmpl-${crypto.randomBytes(12).toString("hex")}`;
@@ -675,8 +767,10 @@ async function handleStudioChat(req, res, body, modelId, stream) {
     let step = firstStep;
     while (!step.done) {
       const frame = step.value;
+      markStart();
       if (frame.usage) usage = frame.usage;
       if (frame.text) {
+        chars += frame.text.length;
         ensureRole();
         send(buildOpenaiChunk({ id, model: modelId, created, delta: { content: frame.text } }));
       }
@@ -689,6 +783,7 @@ async function handleStudioChat(req, res, body, modelId, stream) {
     ensureRole();
     store.markUsed(credential.id);
     store.markOk(credential.id);
+    logFinish(200);
     send(buildOpenaiChunk({ id, model: modelId, created, delta: {}, finishReason: "stop" }));
     if (body.stream_options?.include_usage) {
       send(buildOpenaiChunk({ id, model: modelId, created, delta: {}, finishReason: null, usage: openaiUsage(usage) }));
@@ -698,9 +793,14 @@ async function handleStudioChat(req, res, body, modelId, stream) {
     stopHeartbeat();
   } catch (error) {
     stopHeartbeat();
-    logError(`[pggo stream] ${error.message}`);
+    const status = error.status || 502;
+    const code = error.code || "pggo_failed";
     store.markError(credential.id, error.message);
-    res.write(`data: ${JSON.stringify({ error: { message: explainWaaError(error), type: "pggo_error" } })}\n\n`);
+    logFinish(status, code, error.message);
+    if (!res.headersSent) {
+      return sendOpenaiError(res, status, explainWaaError(error), { type: "pggo_error", code });
+    }
+    res.write(`data: ${JSON.stringify({ error: { message: explainWaaError(error), type: "pggo_error", code, status } })}\n\n`);
     res.write("data: [DONE]\n\n");
     res.end();
   }
@@ -781,7 +881,7 @@ app.post("/admin/api/password", requireAdmin, (req, res) => {
 });
 
 app.get("/admin/api/logs", requireAdmin, (req, res) => {
-  res.json({ logs: recentLogs(Number(req.query.limit) || 200) });
+  res.json({ logs: recentLogs(Number(req.query.limit) || 30) });
 });
 
 app.get("/admin/api/web/models", requireAdmin, (req, res) => {
@@ -1064,7 +1164,9 @@ app.use((req, res) => sendOpenaiError(res, 404, `not found: ${req.method} ${req.
 app.use((error, req, res, next) => {
   if (res.headersSent) return next(error);
   const status = error?.type === "entity.parse.failed" ? 400 : 500;
-  sendOpenaiError(res, status, error?.message || "internal error", { type: "server_error", code: "internal_error" });
+  const code = error?.type === "entity.parse.failed" ? "invalid_json" : "internal_error";
+  logError(`unhandled ${req.method} ${req.originalUrl} status=${status} code=${code} error=${error?.message || "internal error"}`);
+  sendOpenaiError(res, status, error?.message || "internal error", { type: "server_error", code });
 });
 
 await store.init();

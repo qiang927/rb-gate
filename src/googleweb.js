@@ -767,7 +767,7 @@ export class GoogleWebSession {
    * model it actually used in inner[42]; an explicit model that was silently
    * downgraded (Carbon on Pro, for example) fails before any text is yielded.
    */
-  async *chat(prompt, { spec, temporary = false } = {}) {
+  async *chat(prompt, { spec, temporary = false, onStart } = {}) {
     if (!spec || typeof spec !== "object" || !spec.hash) {
       throw new WebError("missing Gemini web model spec", { status: 500, code: "bad_model_spec" });
     }
@@ -811,6 +811,12 @@ export class GoogleWebSession {
     let last = "";
     let pending = [];
     let verified = spec.isAuto;
+    let started = false;
+    const markStart = () => {
+      if (started) return;
+      started = true;
+      onStart?.();
+    };
     const consume = function* (line) {
       if (!line.includes('"wrb.fr"')) return;
       if (line.includes("BardErrorInfo")) {
@@ -833,7 +839,10 @@ export class GoogleWebSession {
             });
           }
           verified = true;
-          for (const delta of pending) yield delta;
+          for (const delta of pending) {
+            markStart();
+            yield delta;
+          }
           pending = [];
         }
       }
@@ -843,8 +852,12 @@ export class GoogleWebSession {
       const delta = text.slice(last.length);
       last = text;
       if (!delta) return;
-      if (verified) yield delta;
-      else pending.push(delta);
+      if (verified) {
+        markStart();
+        yield delta;
+      } else {
+        pending.push(delta);
+      }
     };
 
     for await (const chunk of res) {

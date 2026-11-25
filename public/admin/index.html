@@ -366,7 +366,7 @@
             <button id="logRefreshBtn">刷新</button>
           </div>
         </div>
-        <p class="hint">最近 200 条服务端日志（内存环形缓冲，重启清空）。导入失败、上游 403/429 的完整错误和每次请求都会出现在这里。</p>
+        <p class="hint">最近 30 条日志（内存环形缓冲，重启清空）。每次 AI 请求成功时记录 3 条：发送、开始响应、完成/失败；不记录提示词和回答内容，错误会带 code / status / 请求 ID。</p>
         <pre id="logBox" class="log-box">加载中…</pre>
       </div>
     </section>
@@ -523,7 +523,7 @@
   async function loadLogs() {
     const box = $("logBox");
     try {
-      const data = await api("/admin/api/logs?limit=200");
+      const data = await api("/admin/api/logs?limit=30");
       const lines = (data.logs || []).map((entry) => {
         const time = new Date(entry.t).toTimeString().slice(0, 8);
         return `${time} ${String(entry.level || "info").toUpperCase().padEnd(5)} ${entry.message}`;
