@@ -11,3 +11,20 @@ test("admin inline script parses", () => {
     assert.doesNotThrow(() => new vm.Script(code), "admin script must be valid JavaScript");
   }
 });
+
+test("admin OpenAI base URL is derived from the current page URL", () => {
+  const html = fs.readFileSync(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const match = html.match(/function openAiBaseUrl\(\) \{[\s\S]*?\n  \}/);
+  assert.ok(match, "admin page should define openAiBaseUrl");
+  const context = { location: { origin: "https://example.com", pathname: "/admin/" } };
+  vm.runInNewContext(`${match[0]}\nthis.openAiBaseUrl = openAiBaseUrl;`, context);
+  const base = (pathname) => {
+    context.location.pathname = pathname;
+    return context.openAiBaseUrl();
+  };
+  assert.equal(base("/admin/"), "https://example.com/v1");
+  assert.equal(base("/admin"), "https://example.com/v1");
+  assert.equal(base("/admin/index.html"), "https://example.com/v1");
+  assert.equal(base("/gateway/admin/"), "https://example.com/gateway/v1");
+  assert.equal(base("/"), "https://example.com/v1");
+});

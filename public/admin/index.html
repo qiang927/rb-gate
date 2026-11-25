@@ -534,11 +534,19 @@
     }
   }
 
+  function openAiBaseUrl() {
+    // 面板固定在 /admin/ 下；从当前地址里去掉这一段，保留可能存在的反代路径前缀。
+    const prefix = location.pathname
+      .replace(/\/admin(?:\/.*)?$/, "")
+      .replace(/\/+$/, "");
+    return location.origin + prefix + "/v1";
+  }
+
   async function showApp() {
     $("loginView").classList.add("hidden");
     $("appView").classList.remove("hidden");
     $("logoutBtn").classList.remove("hidden");
-    $("baseUrl").textContent = location.origin + "/v1";
+    $("baseUrl").textContent = openAiBaseUrl();
     await loadOverview();
     await loadProxy();
     startLogPolling();
