@@ -628,7 +628,7 @@
       wrap.innerHTML = '<div class="empty">还没有凭证。在上方粘贴 Gemini 网页版或 pggo（AI Studio）的 Cookie 导入。</div>';
       return;
     }
-    const byGroup = { webg-gateway: [], pggo: [] };
+    const byGroup = { "webg-gateway": [], pggo: [] };
     for (const cred of creds) {
       const group = cred.group === "aistudio" || cred.group === "pggo" ? "pggo" : "webg-gateway";
       byGroup[group].push(cred);
