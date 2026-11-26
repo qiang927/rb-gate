@@ -771,37 +771,50 @@ export class GoogleWebSession {
     if (!spec || typeof spec !== "object" || !spec.hash) {
       throw new WebError("missing Gemini web model spec", { status: 500, code: "bad_model_spec" });
     }
-    const { atToken: at, bl, cookie } = await this.bootstrap();
     this.lastServedModel = null;
     const inner = buildWebInner(prompt, spec, { temporary });
     const uuid = inner[59];
     const body = new URLSearchParams({ "f.req": JSON.stringify([null, JSON.stringify(inner)]) }).toString();
-    const url =
-      `https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate` +
-      `?bl=${encodeURIComponent(bl)}&hl=en&_reqid=${Math.floor(Date.now() / 1000) % 1000000}&rt=c`;
-    const payload = body + "&at=" + encodeURIComponent(at);
-    const res = await openStream(url, {
-      headers: {
-        ...webModelHeaders(spec, uuid),
-        "content-type": "application/x-www-form-urlencoded",
-        origin: "https://gemini.google.com",
-        referer: "https://gemini.google.com/app",
-        "x-same-domain": "1",
-        cookie,
-        "content-length": Buffer.byteLength(payload),
-      },
-      body: payload,
-    });
 
-    if (res.statusCode === 302) {
-      res.resume();
-      this.cookies = null;
-      throw new WebError("gemini session expired (302)", { code: "session_expired", retryable: true });
-    }
-    if (res.statusCode !== 200) {
-      let detail = "";
-      for await (const chunk of res) detail += chunk;
-      throw new WebError(`StreamGenerate failed (${res.statusCode}): ${detail.slice(0, 200)}`, { code: "upstream_failed", retryable: true });
+    // Google answers 405 when the page build label (bl / cfb2h) goes stale.
+    // Tokens are cached for 30 minutes, so refresh them once and retry instead
+    // of failing every request until the cache expires.
+    let res;
+    for (let attempt = 0; ; attempt += 1) {
+      const { atToken: at, bl, cookie } = await this.bootstrap({ force: attempt > 0 });
+      const url =
+        `https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate` +
+        `?bl=${encodeURIComponent(bl)}&hl=en&_reqid=${Math.floor(Date.now() / 1000) % 1000000}&rt=c`;
+      const payload = body + "&at=" + encodeURIComponent(at);
+      res = await openStream(url, {
+        headers: {
+          ...webModelHeaders(spec, uuid),
+          "content-type": "application/x-www-form-urlencoded",
+          origin: "https://gemini.google.com",
+          referer: "https://gemini.google.com/app",
+          "x-same-domain": "1",
+          cookie,
+          "content-length": Buffer.byteLength(payload),
+        },
+        body: payload,
+      });
+
+      if (res.statusCode === 302) {
+        res.resume();
+        this.cookies = null;
+        throw new WebError("gemini session expired (302)", { code: "session_expired", retryable: true });
+      }
+      if (res.statusCode === 405 && attempt === 0) {
+        res.resume();
+        console.error(`[googleweb] StreamGenerate 405 with bl=${bl}; refreshing page tokens and retrying once`);
+        continue;
+      }
+      if (res.statusCode !== 200) {
+        let detail = "";
+        for await (const chunk of res) detail += chunk;
+        throw new WebError(`StreamGenerate failed (${res.statusCode}): ${detail.slice(0, 200)}`, { code: "upstream_failed", retryable: true });
+      }
+      break;
     }
 
     const decoder = new StringDecoder("utf8");
