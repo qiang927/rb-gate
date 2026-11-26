@@ -812,7 +812,10 @@ export class GoogleWebSession {
       if (res.statusCode !== 200) {
         let detail = "";
         for await (const chunk of res) detail += chunk;
-        throw new WebError(`StreamGenerate failed (${res.statusCode}): ${detail.slice(0, 200)}`, { code: "upstream_failed", retryable: true });
+        throw new WebError(
+          `StreamGenerate failed (${res.statusCode}${attempt > 0 ? `, after refresh, bl=${bl}` : ""}): ${detail.slice(0, 200)}`,
+          { code: "upstream_failed", retryable: true },
+        );
       }
       break;
     }
